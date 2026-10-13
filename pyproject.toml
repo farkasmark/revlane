@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "revlane"
+version = "0.1.0"
+description = "Open Bluetooth controller for QCAR toy cars"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "bleak>=0.22",
+    "cryptography>=41",
+]
+
+[project.optional-dependencies]
+gui = ["pygame-ce>=2.5"]          # SDL2 front end
+gamepad = ["evdev>=1.6"]
+dev = ["pytest>=7", "pytest-asyncio>=0.23", "ruff>=0.4"]
+
+[project.scripts]
+qcarctl = "qcar.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["qcar*"]
+
+[tool.setuptools.package-data]
+"qcar.web" = ["*.html", "*.js"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+# tools/ are one-off reverse-engineering probes - kept readable, not linted
+exclude = ["tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

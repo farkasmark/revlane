@@ -1,0 +1,36 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+sdist/
+wheels/
+*.so
+
+# virtualenvs - these are what got published
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*~
+
+# local scratch
+*.log
+.local/

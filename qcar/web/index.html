@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#101218">
+<title>revlane</title>
+<style>
+:root{
+  --bg:#101218; --panel:#1b1f28; --panel2:#232834; --line:#343c4e;
+  --text:#e8ecf4; --dim:#96a2b6; --faint:#606a7e;
+  --good:#43a047; --warn:#ffb300; --bad:#e53935;
+  --accent:#ffb300;
+  --r:14px;
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+  font:16px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  overscroll-behavior:none; touch-action:none; user-select:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.wrap{min-height:100%;display:flex;flex-direction:column;padding:12px;gap:12px;
+  max-width:1200px;margin:0 auto}
+header{display:flex;align-items:center;gap:10px;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;min-height:56px}
+header h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.03em;flex:1;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip{font-size:12px;padding:4px 9px;border-radius:999px;background:var(--panel2);
+  color:var(--dim);border:1px solid var(--line);white-space:nowrap}
+.chip.on{color:var(--good);border-color:var(--good)}
+.chip.warn{color:var(--warn);border-color:var(--warn)}
+.chip.bad{color:var(--bad);border-color:var(--bad)}
+.batt{font-variant-numeric:tabular-nums;font-weight:650}
+.btn{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);
+  padding:12px 14px;font-weight:650;letter-spacing:.04em;font-size:14px;transition:.08s}
+.btn:active{transform:translateY(1px);background:#2b3140}
+.btn.pri{background:var(--accent);color:#14161c;border-color:var(--accent)}
+.btn.danger{background:var(--bad);color:#fff;border-color:var(--bad)}
+.btn.on{background:var(--accent);color:#14161c;border-color:var(--accent)}
+.btn.sm{padding:8px 10px;font-size:12px;border-radius:10px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.grid{display:grid;gap:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  padding:12px 12px 12px 16px;position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;left:0;top:12px;bottom:12px;width:4px;
+  background:var(--c,var(--accent));border-radius:0 4px 4px 0}
+.card h3{margin:0 0 3px;font-size:17px;font-weight:650}
+.card .meta{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+.card .note{font-size:12px;color:var(--faint);margin-top:4px}
+.card .acts{display:flex;gap:8px;margin-top:10px}
+.section{font-size:12px;letter-spacing:.14em;color:var(--faint);margin:4px 0 -4px;font-weight:700}
+/* drive */
+.drive{flex:1;display:grid;gap:12px;grid-template-columns:1fr;min-height:0}
+@media(min-width:760px){.drive{grid-template-columns:1.4fr .9fr}}
+#pad{position:relative;aspect-ratio:1/1;max-height:56vh;margin:0 auto;width:100%;
+  touch-action:none}
+#padCircle{position:absolute;inset:0;border-radius:50%;background:var(--panel);
+  border:2px solid var(--line);transition:border-color .1s}
+#padCircle.active{border-color:var(--accent)}
+#padRing{position:absolute;left:29%;top:29%;width:42%;height:42%;border-radius:50%;
+  border:1px solid var(--line);opacity:.6}
+#knob{position:absolute;left:50%;top:50%;width:30%;height:30%;margin:-15% 0 0 -15%;
+  border-radius:50%;background:var(--panel2);border:2px solid var(--line);
+  transition:background .1s,border-color .1s}
+#knob.active{background:var(--accent);border-color:var(--accent)}
+#padLine{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.lbl{position:absolute;font-size:12px;color:var(--faint);font-weight:700;letter-spacing:.1em}
+.lbl.f{left:50%;top:7%;transform:translateX(-50%)}
+.lbl.b{left:50%;bottom:7%;transform:translateX(-50%)}
+.lbl.l{left:7%;top:50%;transform:translateY(-50%)}
+.lbl.r{right:7%;top:50%;transform:translateY(-50%)}
+.stack{display:flex;flex-direction:column;gap:10px;justify-content:center}
+#stop{width:100%;padding:26px;font-size:26px;letter-spacing:.14em;border-radius:18px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.slider{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:10px 14px}
+.slider label{font-size:11px;letter-spacing:.14em;color:var(--faint);font-weight:700}
+.slider .val{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--warn);margin:6px 0 0}
+.tel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  padding:9px 12px;font-size:12px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.tel b{color:var(--text);font-weight:600}
+.sheet{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;
+  align-items:center;justify-content:center;padding:14px;z-index:20}
+.sheet.show{display:flex}
+.sheet .box{background:var(--panel);border:1px solid var(--line);border-radius:18px;
+  padding:18px;width:min(520px,100%);display:flex;flex-direction:column;gap:12px}
+.sheet h2{margin:0;font-size:19px;letter-spacing:.03em}
+.field{display:flex;flex-direction:column;gap:5px}
+.field span{font-size:11px;letter-spacing:.14em;color:var(--faint);font-weight:700}
+.field input,.field textarea{background:var(--panel2);border:2px solid var(--line);
+  border-radius:10px;color:var(--text);padding:11px;font:inherit;font-size:15px}
+.field input:focus,.field textarea:focus{outline:0;border-color:var(--warn)}
+.sw{display:flex;gap:8px;flex-wrap:wrap}
+.sw i{width:34px;height:34px;border-radius:9px;display:block;border:2px solid transparent}
+.sw i.sel{border-color:#fff}
+.hint{font-size:12px;color:var(--faint);text-align:center;padding:6px 0}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 16px;
+  font-size:13px;opacity:0;transition:.2s;pointer-events:none;z-index:30;max-width:92vw}
+#toast.show{opacity:1}
+.stalled{color:var(--bad);font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <button class="btn sm" id="nav">&lt; GARAGE</button>
+    <h1 id="title">GARAGE</h1>
+    <span class="chip" id="link">offline</span>
+    <span class="chip" id="batt">--%</span>
+  </header>
+
+  <!-- garage -->
+  <div id="garage">
+    <div class="row" style="justify-content:space-between">
+      <div class="section">NEARBY</div>
+      <button class="btn sm" id="scan">SCAN</button>
+    </div>
+    <div class="grid" id="nearby"><div class="hint">scanning&hellip;</div></div>
+    <div class="section" style="margin-top:14px">MY CARS</div>
+    <div class="grid" id="profiles" style="margin-top:6px"></div>
+  </div>
+
+  <!-- drive -->
+  <div id="drive" style="display:none">
+    <div class="drive">
+      <div id="pad">
+        <div id="padCircle">
+          <div id="padRing"></div>
+          <svg id="padLine"><line x1="50%" y1="50%" x2="50%" y2="50%"
+               stroke="#ffb300" stroke-width="3" stroke-linecap="round"/></svg>
+          <div id="knob"></div>
+          <div class="lbl f">FWD</div><div class="lbl b">REV</div>
+          <div class="lbl l">L</div><div class="lbl r">R</div>
+        </div>
+      </div>
+      <div class="stack">
+        <button id="stop" class="btn danger">STOP</button>
+        <div class="two">
+          <button id="turbo" class="btn">TURBO</button>
+          <button id="lights" class="btn">LIGHTS</button>
+        </div>
+        <div class="slider">
+          <label>SPEED</label>
+          <div class="val"><span id="speedVal">80</span>% <span class="chip" id="capChip">cap 80</span></div>
+          <input type="range" id="speed" min="20" max="100" value="80">
+        </div>
+        <div class="hint">drag the pad, or WASD / arrows.<br>release to stop &middot; the car also stops if this page goes quiet</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tel" id="tel">connecting to the service&hellip;</div>
+</div>
+
+<!-- editor -->
+<div class="sheet" id="sheet">
+  <div class="box">
+    <h2 id="sheetTitle">SAVE CAR</h2>
+    <div class="field"><span>NAME</span><input id="fName" autocomplete="off" placeholder="Marci's BMW M3"></div>
+    <div class="field"><span>NOTES</span><textarea id="fNotes" rows="2" placeholder="quirks, who drives it, which wheel drifts"></textarea></div>
+    <div class="field"><span>SPEED CAP <b id="capVal">80</b>%</span>
+      <input type="range" id="fCap" min="20" max="100" value="80"></div>
+    <div class="field"><span>COLOUR</span><div class="sw" id="fSw"></div></div>
+    <div class="two">
+      <button class="btn" id="fTurbo">TURBO DEFAULT</button>
+      <button class="btn" id="fLights">LIGHTS ON</button>
+    </div>
+    <div class="two" style="grid-template-columns:2fr 1fr">
+      <button class="btn pri" id="fSave">SAVE</button>
+      <button class="btn" id="fCancel">CANCEL</button>
+    </div>
+    <button class="btn danger" id="fDelete" style="display:none">DELETE THIS CAR</button>
+    <div class="hint" id="fAddr"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script src="/pad.js"></script>
+<script>
+const ACC = ["#ffb300","#e53935","#1e88e5","#43a047","#8e24aa","#00acc1","#f4511e","#c0ca33"];
+const $ = s => document.querySelector(s);
+const S = {view:'garage', st:{}, pad:{a:false,x:0,y:0}, key:{}, lights:false, turbo:false,
+           speed:80, draft:null};
+
+function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('show');
+  clearTimeout(toast.h); toast.h=setTimeout(()=>t.classList.remove('show'), 2600); }
+async function api(path, body){
+  const r = await fetch(path, body===undefined ? {} :
+    {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if(!r.ok) throw new Error((await r.text()).slice(0,120));
+  return r.json();
+}
+
+/* ---------------- intent ---------------- */
+function flags(){
+  const p = S.pad;
+  const axis = p.a ? QPAD.axisFlags(p.x, p.y) : {forward:false,backward:false,left:false,right:false};
+  const f = QPAD.mergeFlags(axis, S.key);
+  f.lights = S.lights; f.speed = S.turbo ? 100 : S.speed;
+  return f;
+}
+let sent = 0, lastErr = '';
+async function pushIntent(){
+  try{ await api('/api/intent', flags()); sent++; }catch(e){ lastErr = e.message || String(e); }
+}
+// 10 Hz: sends the current state and doubles as the keep-alive the
+// server-side watchdog expects. If we stop (page closed, tab hidden, phone
+// locked, wifi dead) the watchdog pushes STOP within ~0.5 s.
+setInterval(pushIntent, 100);
+// While a finger is down, also drive from requestAnimationFrame. Mobile
+// browsers throttle setInterval hard during touch and scrolling, which is
+// exactly when the car needs the stream; rAF keeps running for as long as the
+// page is painting.
+function rafLoop(){
+  if(S.pad.a) pushIntent();
+  requestAnimationFrame(rafLoop);
+}
+requestAnimationFrame(rafLoop);
+setInterval(async ()=>{ try{ render(await api('/api/state')); }catch(e){ markDead(e); } }, 300);
+
+/* ---------------- pad ---------------- */
+const pad=$('#pad'), knob=$('#knob'), circ=$('#padCircle'), line=$('#padLine line');
+function setKnob(x,y){
+  S.pad.x=x; S.pad.y=y;                     // screen space: +y is down
+  const px=50+x*42, py=50+y*42;
+  knob.style.left=px+'%'; knob.style.top=py+'%';
+  line.setAttribute('x2', px+'%'); line.setAttribute('y2', py+'%');
+}
+function pt(e){
+  const r=pad.getBoundingClientRect(), cx=r.left+r.width/2, cy=r.top+r.height/2;
+  return QPAD.clampVec((e.clientX-cx)/(r.width*0.42), (e.clientY-cy)/(r.height*0.42));
+}
+pad.addEventListener('pointerdown', e=>{ e.preventDefault();
+  S.pad.a=true; circ.classList.add('active'); knob.classList.add('active');
+  try{ pad.setPointerCapture(e.pointerId); }catch(err){}
+  const [x,y]=pt(e); setKnob(x,y); pushIntent(); });
+let lastMovePush=0;
+pad.addEventListener('pointermove', e=>{
+  if(!S.pad.a) return;
+  const [x,y]=pt(e);
+  // only stop when the direction actually changes; a same-direction move must
+  // not re-trigger the animation
+  const before=QPAD.axisFlags(S.pad.x,S.pad.y), after=QPAD.axisFlags(x,y);
+  const changed = ['forward','backward','left','right']
+    .some(k=>before[k]!==after[k]);
+  setKnob(x,y);
+  const now=performance.now();
+  if(changed || now-lastMovePush>60){ lastMovePush=now; pushIntent(); }
+});
+function release(){ if(!S.pad.a) return; S.pad.a=false; setKnob(0,0);
+  circ.classList.remove('active'); knob.classList.remove('active'); pushIntent(); }
+pad.addEventListener('pointerup', release);
+// A cancelled pointer (browser decided it was a scroll/gesture) must stop the
+// car - but every path below also prevents the cancel from happening in the
+// first place, because a cancel mid-drive is indistinguishable from letting go.
+pad.addEventListener('pointercancel', () => {
+  if(S.pad.a) toast('browser stole the drag (pointercancel) - releasing');
+  release();
+});
+pad.addEventListener('lostpointercapture', () => {
+  // fires right after a normal pointerup too, when release() is already done
+  if(S.pad.a) toast('lost the pointer - releasing');
+  release();
+});
+pad.addEventListener('touchstart', e=>e.preventDefault(), {passive:false});
+pad.addEventListener('touchmove', e=>e.preventDefault(), {passive:false});
+pad.addEventListener('contextmenu', e=>e.preventDefault());
+pad.addEventListener('dragstart', e=>e.preventDefault());
+
+/* ---------------- buttons / keys ---------------- */
+$('#stop').addEventListener('pointerdown', async e=>{ e.preventDefault();
+  S.key={}; S.pad.a=false; setKnob(0,0);
+  circ.classList.remove('active'); knob.classList.remove('active');
+  try{ await api('/api/stop'); }catch(err){} });
+$('#turbo').addEventListener('click', ()=>{ S.turbo=!S.turbo;
+  $('#turbo').classList.toggle('on',S.turbo); pushIntent(); });
+$('#lights').addEventListener('click', ()=>{ S.lights=!S.lights;
+  $('#lights').classList.toggle('on',S.lights); pushIntent(); });
+$('#speed').addEventListener('input', e=>{ S.speed=+e.target.value; S.turbo=false;
+  $('#turbo').classList.remove('on'); $('#speedVal').textContent=S.speed; });
+addEventListener('keydown', e=>{ if(S.view!=='drive'||e.repeat) return;
+  const c=e.key.toLowerCase();
+  if('wasd'.includes(c)&&c.length===1){ S.key[c]=true; e.preventDefault(); }
+  else if(e.key==='ArrowUp') S.key.w=1; else if(e.key==='ArrowDown') S.key.s=1;
+  else if(e.key==='ArrowLeft') S.key.a=1; else if(e.key==='ArrowRight') S.key.d=1;
+  else if(e.key===' '){ $('#stop').dispatchEvent(new Event('pointerdown')); }
+  else if(c==='l') $('#lights').click(); else if(c==='t') $('#turbo').click();
+  else if(c==='q'||e.key==='Escape') showGarage(); });
+addEventListener('keyup', e=>{ const c=e.key.toLowerCase();
+  if('wasd'.includes(c)&&c.length===1) delete S.key[c];
+  if(e.key==='ArrowUp') delete S.key.w; if(e.key==='ArrowDown') delete S.key.s;
+  if(e.key==='ArrowLeft') delete S.key.a; if(e.key==='ArrowRight') delete S.key.d; });
+// be a good citizen: the instant we leave the foreground, hand the car a stop
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden){
+  S.key={}; S.pad.a=false; setKnob(0,0); api('/api/stop').catch(()=>{}); } });
+addEventListener('blur', ()=>{ S.key={}; });
+addEventListener('pagehide', ()=>{ navigator.sendBeacon &&
+  navigator.sendBeacon('/api/stop', '{}'); });
+
+/* ---------------- views ---------------- */
+function showDrive(name){ $('#drive').style.display=''; $('#garage').style.display='none';
+  S.view='drive'; $('#title').textContent=name||'DRIVE'; $('#nav').style.display=''; }
+function showGarage(){ $('#drive').style.display='none'; $('#garage').style.display='';
+  S.view='garage'; $('#title').textContent='GARAGE'; $('#nav').style.display='none';
+  S.key={}; S.pad.a=false; setKnob(0,0); api('/api/stop').catch(()=>{}); }
+$('#nav').addEventListener('click', async ()=>{ showGarage();
+  try{ await api('/api/disconnect'); }catch(e){} });
+$('#scan').addEventListener('click', ()=>{ $('#nearby').innerHTML='<div class="hint">scanning&hellip;</div>';
+  api('/api/scan').catch(e=>toast('scan failed: '+e.message)); });
+
+/* ---------------- render ---------------- */
+let dead=false;
+function markDead(e){ if(!dead){ dead=true; toast('lost the controller service'); }
+  const l=$('#link'); l.textContent='NO LINK'; l.className='chip bad'; }
+function render(st){
+  dead=false;
+  S.st=st;
+  const l=$('#link'); l.textContent=st.state;
+  l.className='chip'+(st.state==='connected'?' on':(st.state==='error'?' bad':''));
+  const b=$('#batt');
+  const pct = st.telemetry ? st.telemetry.battery : (st.car&&st.car.battery);
+  b.innerHTML='<span class="batt">'+(pct==null?'--%':pct+'%')+'</span>';
+  b.className='chip'+(pct==null?'':(pct>=60?' on':(pct>=30?' warn':' bad')));
+  if(st.car){ document.documentElement.style.setProperty('--accent', st.car.accent);
+    $('#title').textContent=st.car.name; $('#speed').max=st.cap;
+    if(S.speed>st.cap){ S.speed=st.cap; $('#speed').value=st.cap; }
+    $('#speedVal').textContent=S.speed; }
+  $('#capChip').textContent='cap '+st.cap;
+  const parts = [
+    st.live?'':'<span class="stalled">STALLED &rarr; STOPPED</span>',
+    'cmd <b>'+st.plain.slice(8)+'</b>',
+    'tx <b>'+st.tx+'</b>', 'rate <b>'+st.rate+'/s</b>',
+    'err <b>'+st.errors+'</b>',
+    st.telemetry?('seq <b>'+st.telemetry.seq+'</b>'):''
+  ];
+  // client tx lets you tell a stalled page from a stalled radio: if `sent`
+  // stops climbing while you hold the pad, the browser is the bottleneck
+  parts.push('sent <b>'+sent+'</b>'+(lastErr?' <span class="stalled">'+esc(lastErr)+'</span>':''));
+  $('#tel').innerHTML = parts.filter(Boolean).join(' ');
+  if(S.view==='garage'){ renderProfiles(st); renderNearby(st); }
+}
+function renderProfiles(st){
+  const el=$('#profiles');
+  if(!st.profiles.length){ el.innerHTML='<div class="hint">no saved cars yet</div>'; return; }
+  el.innerHTML='';
+  st.profiles.forEach(p=>{
+    const d=document.createElement('div'); d.className='card'; d.style.setProperty('--c',p.accent);
+    d.innerHTML=`<h3>${esc(p.name)}</h3>
+      <div class="meta">${p.address} &middot; ${p.battery==null?'no batt':p.battery+'%'}
+      &middot; seen ${p.seen} &middot; ${p.odometer} &middot; cap ${p.cap}%</div>
+      ${p.notes?`<div class="note">${esc(p.notes)}</div>`:''}
+      <div class="acts"><button class="btn pri sm" data-d>DRIVE</button>
+      <button class="btn sm" data-e>EDIT</button></div>`;
+    d.querySelector('[data-d]').onclick=async()=>{
+      try{ await api('/api/connect',{address:p.address}); showDrive(p.name); }
+      catch(e){ toast('connect failed: '+e.message); } };
+    d.querySelector('[data-e]').onclick=()=>openSheet({address:p.address, id:p.id, name:p.name,
+      notes:p.notes, cap:p.cap, accent:p.accent, turbo:p.turbo, lights:p.lights, isNew:false});
+    el.appendChild(d);
+  });
+}
+function renderNearby(st){
+  const el=$('#nearby'), scanning = st.state==='scanning';
+  $('#scan').textContent = scanning ? 'SCANNING…' : 'SCAN';
+  if(!st.nearby.length){
+    // do not accuse the car of being off while we are still listening for it
+    el.innerHTML = `<div class="hint">${scanning
+      ? 'listening for cars&hellip;'
+      : 'no cars in range &mdash; is one switched on?'}</div>`;
+    return;
+  }
+  el.innerHTML='';
+  st.nearby.forEach(n=>{
+    const d=document.createElement('div'); d.className='card'; d.style.setProperty('--c','#606a7e');
+    d.innerHTML=`<h3>${esc(n.profile_name||n.name)}</h3>
+      <div class="meta">${n.address} &middot; ${n.rssi} dBm${n.saved?' &middot; saved':''}</div>
+      <div class="acts"><button class="btn sm">${n.saved?'EDIT':'ADD'}</button></div>`;
+    d.querySelector('button').onclick=()=>{
+      const p = st.profiles.find(p=>p.address===n.address);
+      openSheet(p?{address:p.address,id:p.id,name:p.name,notes:p.notes,cap:p.cap,
+                   accent:p.accent,turbo:p.turbo,lights:p.lights,isNew:false}
+                       :{address:n.address,name:'',notes:'',cap:80,accent:ACC[st.profiles.length%ACC.length],
+                         turbo:false,lights:false,isNew:true});
+    };
+    el.appendChild(d);
+  });
+  if(scanning){ const h=document.createElement('div');
+    h.className='hint'; h.textContent='still listening… more may appear';
+    el.appendChild(h); }
+}
+const esc = s => (s||'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------------- editor ---------------- */
+function openSheet(d){
+  S.draft={...d};
+  $('#sheetTitle').textContent = d.isNew?'SAVE CAR':'EDIT CAR';
+  $('#fName').value=d.name||''; $('#fNotes').value=d.notes||'';
+  $('#fCap').value=d.cap; $('#capVal').textContent=d.cap;
+  $('#fAddr').textContent=d.address;
+  $('#fTurbo').classList.toggle('on', !!d.turbo);
+  $('#fLights').classList.toggle('on', !!d.lights);
+  $('#fDelete').style.display=d.isNew?'none':'';
+  const sw=$('#fSw'); sw.innerHTML='';
+  ACC.forEach(c=>{ const i=document.createElement('i'); i.style.background=c;
+    if(c===d.accent) i.classList.add('sel');
+    i.onclick=()=>{ S.draft.accent=c; [...sw.children].forEach(x=>x.classList.remove('sel'));
+      i.classList.add('sel'); };
+    sw.appendChild(i); });
+  $('#sheet').classList.add('show');
+}
+$('#fCap').addEventListener('input', e=>{ $('#capVal').textContent=e.target.value; });
+$('#fTurbo').addEventListener('click', ()=>{ S.draft.turbo=!S.draft.turbo;
+  $('#fTurbo').classList.toggle('on',S.draft.turbo); });
+$('#fLights').addEventListener('click', ()=>{ S.draft.lights=!S.draft.lights;
+  $('#fLights').classList.toggle('on',S.draft.lights); });
+$('#fCancel').addEventListener('click', ()=>$('#sheet').classList.remove('show'));
+$('#fSave').addEventListener('click', async ()=>{
+  const d=S.draft; d.name=$('#fName').value.trim(); d.notes=$('#fNotes').value;
+  d.cap=+$('#fCap').value;
+  try{ const r=await api('/api/profile/save', d); toast('saved '+r.name);
+    $('#sheet').classList.remove('show'); }
+  catch(e){ toast('save failed: '+e.message); } });
+$('#fDelete').addEventListener('click', async ()=>{
+  try{ await api('/api/profile/delete', {id:S.draft.id}); toast('removed');
+    $('#sheet').classList.remove('show'); }catch(e){ toast('delete failed'); } });
+
+showGarage();
+</script>
+</body>
+</html>
