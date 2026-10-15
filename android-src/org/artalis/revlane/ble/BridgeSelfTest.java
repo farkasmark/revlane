@@ -16,38 +16,41 @@ public final class BridgeSelfTest {
     private BridgeSelfTest() {
     }
 
-    public static void fireScanHit(PyBleListener l) {
-        l.onScanHit("AA:11", "QCAR-1234", -40, 0x5452);
+    public static void fireScanHit(PyBleListener l, long generation) {
+        l.onScanHit(generation, "AA:11", "QCAR-1234", -40, 0x5452);
     }
 
     /** Nameless advertisement - the bridge classes coerce null to ""
      *  before calling the listener (null Strings crash pyjnius). */
-    public static void fireScanHitNoName(PyBleListener l) {
-        l.onScanHit("BB:22", "", -50, -1);
+    public static void fireScanHitNoName(PyBleListener l, long generation) {
+        l.onScanHit(generation, "BB:22", "", -50, -1);
     }
 
-    public static void fireScanFailed(PyBleListener l) {
-        l.onScanFailed(3);
+    public static void fireScanFailed(PyBleListener l, long generation) {
+        l.onScanFailed(generation, 3);
     }
 
-    public static void fireGattState(PyBleListener l) {
-        l.onGattState("AA:11", 8, 0);
+    public static void fireGattState(PyBleListener l, long generation) {
+        l.onGattState(generation, "AA:11", 8, 0);
     }
 
-    public static void fireServicesDiscovered(PyBleListener l) {
-        l.onServicesDiscovered("AA:11", 0);
+    public static void fireServicesDiscovered(PyBleListener l, long generation) {
+        l.onServicesDiscovered(generation, "AA:11", 0);
     }
 
-    public static void fireCharacteristicWrite(PyBleListener l) {
-        l.onCharacteristicWrite("AA:11", "0000fff0-0000-1000-8000-00805f9b34fb", 0);
+    public static void fireCharacteristicWrite(PyBleListener l, long generation) {
+        l.onCharacteristicWrite(generation, "AA:11", "0000fff0-0000-1000-8000-00805f9b34fb", 0);
     }
 
-    public static void fireDescriptorWrite(PyBleListener l) {
-        l.onDescriptorWrite("AA:11", "00002902-0000-1000-8000-00805f9b34fb", 0);
+    public static void fireDescriptorWrite(PyBleListener l, long generation) {
+        l.onDescriptorWrite(generation, "AA:11", "00002902-0000-1000-8000-00805f9b34fb", 0);
     }
 
-    public static void fireNotify(PyBleListener l, int b0) {
-        l.onNotify("AA:11", "0000fff0-0000-1000-8000-00805f9b34fb", new byte[] {(byte) b0, 0x5A});
+    /** The byte[] comes first in the signature: pyjnius corrupts ByteArray
+     *  wrappers when primitives precede the array (see PyBleListener). */
+    public static void fireNotify(PyBleListener l, long generation, int b0) {
+        l.onNotify(new byte[] {(byte) b0, 0x5A}, generation, "AA:11",
+                "0000fff0-0000-1000-8000-00805f9b34fb");
     }
 
     /** Java-side instanceof - pyjnius proxies do not expose getClass(). */

@@ -12,9 +12,13 @@
 # read from logcat ("I python" lines, BRIDGE-SELFTEST markers). The original
 # entry point is restored afterwards, and the app relaunched normally.
 #
-# Prerequisites: a debug build installed (bin/revlane-*-debug.apk) that
-# contains the BridgeSelfTest shim (android-src/, compiled into the APK),
-# and a device attached to adb. Run from the repo root:
+# Prerequisites, IN THIS ORDER: install the freshly built APK FIRST
+# (adb install -r bin/revlane-*-debug.apk), THEN run this script. The
+# self-test swaps only the Python entry point (files/app/main.py) inside
+# the INSTALLED APK - the Java bridge classes and the BridgeSelfTest shim
+# come from that APK's dex. Against a stale install it exercises the old
+# bridge and proves nothing about the current sources.
+# Also needed: a device attached to adb. Run from the repo root:
 #   tools/run_bridge_selftest.sh
 set -euo pipefail
 

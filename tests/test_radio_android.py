@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 from qcar.radio import Discovered
-from qcar.radio_android import JAVA_CLASSES, AndroidRadio
+from qcar.radio_android import JAVA_CLASSES, AndroidRadio, _CallbackRouter
 
 REPO = Path(__file__).resolve().parent.parent
 BRIDGE_DIR = REPO / "android-src" / "org" / "artalis" / "revlane" / "ble"
@@ -84,18 +84,6 @@ def test_bridge_sources_declare_the_right_hierarchy():
     assert JAVA_CLASSES["PyBleListener"] == "org.artalis.revlane.ble.PyBleListener"
     assert JAVA_CLASSES["PyScanCallback"] == "org.artalis.revlane.ble.PyScanCallback"
     assert JAVA_CLASSES["PyGattCallback"] == "org.artalis.revlane.ble.PyGattCallback"
-
-
-def test_java_listener_matches_interface_method_names():
-    # every method the Java interface declares must have a matching Python
-    # handler in radio_android.py - signature drift is the realistic failure
-    listener = (BRIDGE_DIR / "PyBleListener.java").read_text()
-    py = (REPO / "qcar" / "radio_android.py").read_text()
-    methods = re.findall(r"void (on\w+)\(", listener)
-    assert len(methods) >= 7
-    for name in methods:
-        assert re.search(rf"def {name}\(self", py), f"missing Python handler {name}"
-        assert f'"{name}"' not in py or f"def {name}(self" in py
 
 
 def test_java_bridge_compiles_against_android_jar(tmp_path):
@@ -196,3 +184,234 @@ async def test_notify_callback_receives_bytes_via_the_loop():
     radio._cb_notify("AA:11", "fff1", None)  # defensive: no payload
     await asyncio.sleep(0)
     assert got == [b"\x01\x02\x03"]
+
+
+# ------------------------------------------------------------------ routing
+# Every PyBleListener method leads with a session generation stamped into
+# the per-session Java bridge object; the router delivers on that generation
+# and strips it, so a scan cannot steal a live connection's acknowledgements
+# and a previous connection to the same car address cannot poison the next
+# one.
+
+
+class _RecordingRadio:
+    """Duck-typed AndroidRadio that records every callback it receives."""
+
+    def __init__(self, name):
+        self.name = name
+        self.calls: list[tuple] = []
+
+    def _cb_scan_hit(self, *args):
+        self.calls.append(("_cb_scan_hit", args))
+
+    def _cb_scan_failed(self, *args):
+        self.calls.append(("_cb_scan_failed", args))
+
+    def _cb_conn_state(self, *args):
+        self.calls.append(("_cb_conn_state", args))
+
+    def _cb_services(self, *args):
+        self.calls.append(("_cb_services", args))
+
+    def _cb_write(self, *args):
+        self.calls.append(("_cb_write", args))
+
+    def _cb_descriptor(self, *args):
+        self.calls.append(("_cb_descriptor", args))
+
+    def _cb_notify(self, *args):
+        self.calls.append(("_cb_notify", args))
+
+
+def test_router_delivers_scan_events_to_their_session():
+    router = _CallbackRouter()
+    scanning, other = _RecordingRadio("scan"), _RecordingRadio("other")
+    gen = router.new_session(scanning)
+    router.new_session(other)
+
+    router._cb_scan_hit(gen, "AA", "QCAR-1", -40, 0x5452)
+    router._cb_scan_failed(gen, 2)
+
+    # the generation is stripped: handlers keep their plain signatures
+    assert scanning.calls == [
+        ("_cb_scan_hit", ("AA", "QCAR-1", -40, 0x5452)),
+        ("_cb_scan_failed", (2,)),
+    ]
+    assert other.calls == []
+
+
+def test_router_delivers_gatt_events_by_generation():
+    router = _CallbackRouter()
+    car_a, car_b = _RecordingRadio("a"), _RecordingRadio("b")
+    gen_a, gen_b = router.new_session(car_a), router.new_session(car_b)
+
+    router._cb_write(gen_a, "AA:11", "fff0", 0)
+    router._cb_notify(gen_b, "BB:22", "fff1", b"\x01")
+    router._cb_conn_state(gen_a, "AA:11", 0, 0)
+    router._cb_services(gen_b, "BB:22", 0)
+    router._cb_descriptor(gen_a, "AA:11", "2902", 0)
+
+    assert car_a.calls == [
+        ("_cb_write", ("AA:11", "fff0", 0)),
+        ("_cb_conn_state", ("AA:11", 0, 0)),
+        ("_cb_descriptor", ("AA:11", "2902", 0)),
+    ]
+    assert car_b.calls == [
+        ("_cb_notify", ("BB:22", "fff1", b"\x01")),
+        ("_cb_services", ("BB:22", 0)),
+    ]
+
+
+def test_router_scan_does_not_steal_a_connection_ack():
+    """Regression: a scan starting next to an open connection used to make
+    the scanning radio the global callback owner, so the connected radio's
+    write acknowledgements were delivered to it (future unresolved until
+    timeout) - exactly what returning to the garage does, since
+    GarageScene.enter() scans while the car stays connected."""
+    router = _CallbackRouter()
+    connected, scanning = _RecordingRadio("conn"), _RecordingRadio("scan")
+    conn_gen = router.new_session(connected)
+    scan_gen = router.new_session(scanning)
+
+    router._cb_write(scan_gen, "AA:11", "fff0", 0)  # scan-session traffic
+    router._cb_write(conn_gen, "AA:11", "fff0", 0)  # the connection's ACK
+
+    assert connected.calls == [("_cb_write", ("AA:11", "fff0", 0))]
+    assert scanning.calls == [("_cb_write", ("AA:11", "fff0", 0))]
+
+
+def test_router_drops_events_after_end_session():
+    router = _CallbackRouter()
+    radio = _RecordingRadio("a")
+    gen = router.new_session(radio)
+    router.end_session(gen)  # what disconnect()'s release does
+
+    router._cb_write(gen, "AA:11", "fff0", 0)  # late ACK from the closing link
+    assert radio.calls == []
+
+
+def test_generations_are_not_reused():
+    router = _CallbackRouter()
+    first, second = _RecordingRadio("1"), _RecordingRadio("2")
+    gen1 = router.new_session(first)
+    router.end_session(gen1)
+    gen2 = router.new_session(second)
+
+    assert gen2 != gen1
+
+
+def test_router_ignores_unknown_attribute_names():
+    router = _CallbackRouter()
+    with pytest.raises(AttributeError):
+        router.__getattr__("something_else")  # explicit: B018/B009 want the dunder
+
+
+# ------------------------------------------------------------------
+# The same-address reconnect sequence: disconnect A -> reconnect A ->
+# begin an operation -> deliver A's OLD callback.  Address-based routing
+# cannot distinguish the sessions; the generation token must, and the new
+# operation must stay pending with its state untouched.
+
+
+async def test_late_callback_from_old_session_leaves_new_operation_pending():
+    router = _CallbackRouter()
+
+    first = AndroidRadio()  # session 1: connected to AA:11, then disconnected
+    gen_old = router.new_session(first)
+    router.end_session(gen_old)
+
+    second = AndroidRadio()  # session 2: reconnect to the SAME address
+    gen_new = router.new_session(second)
+    second._loop = asyncio.get_running_loop()
+
+    # an operation begins on the new connection: a write future is pending
+    fut = second._write_fut = second._loop.create_future()
+
+    # the OLD session's callbacks arrive late (same address, stale generation)
+    router._cb_write(gen_old, "AA:11", "fff0", 0)  # its ACK, after the fact
+    await asyncio.sleep(0)
+    assert not fut.done(), "old session's ACK resolved the new session's write"
+    assert second._link_up is False, "old session's event changed the link state"
+
+    router._cb_conn_state(gen_old, "AA:11", 8, 0)  # its late state change
+    await asyncio.sleep(0)
+    assert not fut.done()
+    assert second._link_up is False
+
+    # the NEW session's own callback still gets through and resolves it
+    router._cb_write(gen_new, "AA:11", "fff0", 0)
+    await asyncio.wait_for(fut, 1)
+
+
+async def test_late_state_change_from_old_session_cannot_flip_new_link():
+    router = _CallbackRouter()
+
+    first = AndroidRadio()
+    gen_old = router.new_session(first)
+    router.end_session(gen_old)
+
+    second = AndroidRadio()
+    gen_new = router.new_session(second)
+    second._loop = asyncio.get_running_loop()
+
+    # the new connection comes up
+    router._cb_conn_state(gen_new, "AA:11", 0, 2)  # STATE_CONNECTED
+    await asyncio.sleep(0)
+    assert second._link_up is True
+
+    # the old session's late disconnect must not tear the new link down
+    router._cb_conn_state(gen_old, "AA:11", 0, 0)  # STATE_DISCONNECTED
+    await asyncio.sleep(0)
+    assert second._link_up is True
+
+
+def test_java_listener_matches_interface_method_names():
+    # every method the Java interface declares must have a matching Python
+    # handler in radio_android.py - signature drift is the realistic failure
+    listener = (BRIDGE_DIR / "PyBleListener.java").read_text()
+    py = (REPO / "qcar" / "radio_android.py").read_text()
+    methods = re.findall(r"void (on\w+)\(", listener)
+    assert len(methods) >= 7
+    for name in methods:
+        assert re.search(rf"def {name}\(self", py), f"missing Python handler {name}"
+
+
+def test_python_descriptors_match_the_java_interface():
+    """The @java_method JNI descriptors must match the Java interface
+    EXACTLY, derived independently from both sources: one-sided edits here
+    are invisible until the on-device self-test, and a mismatch aborts the
+    JVM (or silently mis-routes callbacks) in production. Builds the JNI
+    notation from the Java parameter list and compares with the descriptor
+    strings in radio_android.py.
+    """
+    listener = (BRIDGE_DIR / "PyBleListener.java").read_text()
+    py = (REPO / "qcar" / "radio_android.py").read_text()
+
+    JNI = {"long": "J", "int": "I", "String": "Ljava/lang/String;", "byte[]": "[B"}
+
+    java_sigs = {}
+    for name, params in re.findall(r"void (on\w+)\((.*?)\);", listener, re.S):
+        types = [p.strip().split()[0] for p in params.split(",") if p.strip()]
+        unknown = [t for t in types if t not in JNI]
+        assert not unknown, f"{name}: add JNI mapping for {unknown}"
+        java_sigs[name] = "(" + "".join(JNI[t] for t in types) + ")V"
+    assert len(java_sigs) >= 7, "interface parse came up short - check the regex"
+
+    py_sigs = {
+        name: f"({params}){ret}" for params, ret, name in re.findall(
+            r'@java_method\("\(([^)]+)\)(\w+)"\)\s*\n\s*def (on\w+)\(', py
+        )
+    }
+    assert set(py_sigs) == set(java_sigs), (
+        f"method sets differ: java-only={set(java_sigs) - set(py_sigs)} "
+        f"python-only={set(py_sigs) - set(java_sigs)}"
+    )
+    for name, sig in java_sigs.items():
+        assert py_sigs[name] == sig, f"{name}: python {py_sigs[name]!r} != java {sig!r}"
+    # and every event leads with the session generation (except notify,
+    # whose byte[] must be first - pyjnius corrupts arrays after primitives)
+    for name, sig in java_sigs.items():
+        if name == "onNotify":
+            assert sig.startswith("([B"), sig
+        else:
+            assert sig.startswith("(J"), sig

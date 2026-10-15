@@ -14,8 +14,15 @@ Design notes
   ``PyGattCallback`` extend the framework callbacks and forward every event
   to a ``PyBleListener``, which the Python side implements with a
   ``PythonJavaClass``. The Java bridge flattens ScanResults into plain types
-  on the Java side. Both the Python listener and the Java callback objects
-  are retained on the radio for as long as Android may call into them.
+  on the Java side. The listener proxy is built once by ``prime()`` on the
+  main thread (proxy creation is main-thread-only) and retained for the
+  process lifetime.  Each scan/connection then creates its own plain Java
+  callback object - a normal constructor call, fine on any thread - stamped
+  with a session *generation*: a token allocated by the router that every
+  event leads with. ``_CallbackRouter`` delivers each event to the session
+  that owns its generation; events from an ended session (late ACKs from a
+  closed link, or a previous connection to the same car address) are lookup
+  misses and dropped.
 * Android GATT callbacks arrive on **binder threads**; they are bridged onto
   the caller's asyncio loop with ``call_soon_threadsafe`` and per-operation
   futures, so the rest of the code stays plain async.
@@ -52,6 +59,110 @@ from .radio import (
 
 log = logging.getLogger("qcar")
 
+class _CallbackRouter:
+    """Delivers ``PyBleListener`` events to the radio that owns them.
+
+    Every ``PyBleListener`` method leads with a **generation** - a session
+    token allocated here and stamped into the Java bridge object at creation
+    (``PyScanCallback(listener, gen)`` / ``PyGattCallback(listener, gen)``;
+    plain Java constructors, so the worker thread may create them).  A
+    session owns its generation from ``new_session()`` until
+    ``end_session()``; delivery is a dict lookup on the generation.
+
+    This is what makes sequential sessions to the *same car address* safe:
+    the address cannot tell two connections apart, but generations can.  A
+    late ACK from a closed connection carries the old generation - a lookup
+    miss after ``end_session()`` - so it can neither resolve the next
+    connection's pending write future nor change its link state.  (A
+    ``fut.done()`` guard on the handler side cannot do this: it protects a
+    *completed* future, and the new session's future is pending.)  The
+    backend serialises *operations* on its worker loop, but Android callback
+    lifetimes outlive the operations that started them.
+    """
+
+    def __init__(self) -> None:
+        self._sessions: dict[int, AndroidRadio] = {}
+        self._next_generation = 1
+
+    def new_session(self, radio: AndroidRadio) -> int:
+        """Allocate a generation and make ``radio`` own it (call before
+        startScan/connectGatt, so no callback can race the registration)."""
+        generation = self._next_generation
+        self._next_generation += 1
+        self._sessions[generation] = radio
+        return generation
+
+    def end_session(self, generation: int) -> None:
+        """Release ownership: later events for this session are dropped."""
+        self._sessions.pop(generation, None)
+
+    def __getattr__(self, name: str):
+        if not name.startswith("_cb_"):
+            raise AttributeError(name)
+
+        def forward(*args) -> None:
+            # every callback leads with its session's generation; the owning
+            # radio gets the event without it (its handlers never see it)
+            radio = self._sessions.get(args[0])
+            if radio is not None:
+                getattr(radio, name)(*args[1:])
+
+        return forward
+
+
+#: shared callback objects built by ``prime()`` on the main thread
+#: (the listener proxy and the router; per-session bridge objects are
+#: created by scan()/connect())
+_shared: dict | None = None
+
+
+def _shared_cbs() -> dict:
+    """The prime()-built shared objects (proxy creation is main-thread only)."""
+    if _shared is None:
+        raise ConnectionError(
+            "BLE bridge not primed - select QCAR_RADIO=android in main.py"
+        )
+    return _shared
+
+
+def prime() -> None:
+    """Resolve every Java class up front, on the main (Java-attached) thread.
+
+    pyjnius resolves classes through JNI ``FindClass``, whose classloader
+    context comes from how the *current thread* is attached to the JVM: the
+    bootstrap/UI thread sees the APK's PathClassLoader, but a plain Python
+    thread attaches bare and only sees the system loader
+    (``DexPathList[[directory "."]]) - where our ``android-src`` bridge
+    classes do not exist, so every lookup there raises
+    ``ClassNotFoundException``.  ``_classes()`` caches its result module-wide,
+    so calling this once from ``main.py`` makes all later worker-thread use
+    (backend scans, GATT) safe.
+
+    Class *resolution* is only half of it: creating a ``PythonJavaClass``
+    proxy instance also needs the main thread (``find_javaclass`` for the
+    interfaces plus the thread's context classloader for
+    ``Proxy.newProxyInstance``).  So ``prime()`` builds the listener proxy
+    here, once, bound to the ``_CallbackRouter``.  The per-session bridge
+    objects (``PyScanCallback``/``PyGattCallback``) are *plain* Java objects
+    - normal constructors on a cached class, no proxy machinery - so
+    scan()/connect() may create those on the worker thread, one per session,
+    each stamped with its generation.
+    """
+    global _shared
+    _classes()
+    if _shared is None:
+        from jnius import autoclass
+
+        # warm pyjnius's own lazily-resolved handler class (used by every
+        # proxy creation) - same thread-context rule as above
+        autoclass("org.jnius.NativeInvocationHandler")
+        router = _CallbackRouter()
+        listener = _classes()["PyBleListenerImpl"](router)
+        _shared = {"router": router, "listener": listener}
+        # the listener is retained for the process lifetime: Android holds a
+        # raw pointer into it and may call it at any time
+        log.info("android: BLE bridge primed (%s classes)", len(_jni_classes))
+
 # BluetoothProfile.STATE_* / transport constants
 STATE_DISCONNECTED = 0
 STATE_CONNECTED = 2
@@ -69,6 +180,7 @@ JAVA_CLASSES = {
     "BluetoothManager": "android.bluetooth.BluetoothManager",
     "Context": "android.content.Context",
     "UUID": "java.util.UUID",
+    "ArrayList": "java.util.ArrayList",
     "ScanSettings": "android.bluetooth.le.ScanSettings",
     "ScanSettingsBuilder": "android.bluetooth.le.ScanSettings$Builder",
     "GattCharacteristic": "android.bluetooth.BluetoothGattCharacteristic",
@@ -106,33 +218,39 @@ def _classes():
                 super().__init__()
                 self._radio = radio
 
-            @java_method("(Ljava/lang/String;Ljava/lang/String;II)V")
-            def onScanHit(self, address, name, rssi, mfg_id):
-                self._radio._cb_scan_hit(address, name, rssi, mfg_id)
+            # every method leads with the session generation (a Java long);
+            # it is passed through to the router, which routes on it and
+            # strips it - the radio handlers never see it
 
-            @java_method("(I)V")
-            def onScanFailed(self, error_code):
-                self._radio._cb_scan_failed(error_code)
+            @java_method("(JLjava/lang/String;Ljava/lang/String;II)V")
+            def onScanHit(self, generation, address, name, rssi, mfg_id):
+                self._radio._cb_scan_hit(generation, address, name, rssi, mfg_id)
 
-            @java_method("(Ljava/lang/String;II)V")
-            def onGattState(self, address, status, new_state):
-                self._radio._cb_conn_state(address, status, new_state)
+            @java_method("(JI)V")
+            def onScanFailed(self, generation, error_code):
+                self._radio._cb_scan_failed(generation, error_code)
 
-            @java_method("(Ljava/lang/String;I)V")
-            def onServicesDiscovered(self, address, status):
-                self._radio._cb_services(address, status)
+            @java_method("(JLjava/lang/String;II)V")
+            def onGattState(self, generation, address, status, new_state):
+                self._radio._cb_conn_state(generation, address, status, new_state)
 
-            @java_method("(Ljava/lang/String;Ljava/lang/String;I)V")
-            def onCharacteristicWrite(self, address, char_uuid, status):
-                self._radio._cb_write(address, char_uuid, status)
+            @java_method("(JLjava/lang/String;I)V")
+            def onServicesDiscovered(self, generation, address, status):
+                self._radio._cb_services(generation, address, status)
 
-            @java_method("(Ljava/lang/String;Ljava/lang/String;I)V")
-            def onDescriptorWrite(self, address, char_uuid, status):
-                self._radio._cb_descriptor(address, char_uuid, status)
+            @java_method("(JLjava/lang/String;Ljava/lang/String;I)V")
+            def onCharacteristicWrite(self, generation, address, char_uuid, status):
+                self._radio._cb_write(generation, address, char_uuid, status)
 
-            @java_method("(Ljava/lang/String;Ljava/lang/String;[B)V")
-            def onNotify(self, address, char_uuid, value):
-                self._radio._cb_notify(address, char_uuid, value)
+            @java_method("(JLjava/lang/String;Ljava/lang/String;I)V")
+            def onDescriptorWrite(self, generation, address, char_uuid, status):
+                self._radio._cb_descriptor(generation, address, char_uuid, status)
+
+            # the byte[] comes first: pyjnius corrupts ByteArray wrappers
+            # when primitives precede the array (bridge self-test finding)
+            @java_method("([BJLjava/lang/String;Ljava/lang/String;)V")
+            def onNotify(self, value, generation, address, char_uuid):
+                self._radio._cb_notify(generation, address, char_uuid, value)
 
         _pyble_listener_cls = PyBleListener
         _jni_classes["PyBleListenerImpl"] = _pyble_listener_cls
@@ -144,15 +262,13 @@ class AndroidRadio(Radio):
         # 'adapter' is a BlueZ hci address on the desktop; Android picks its
         # own controller, so it is ignored here.
         self.adapter = None
+        self.address: str | None = None  # set by connect(); informational
+        self._generation: int | None = None  # set by scan()/connect()
+        self._scan_cb = None  # retained: Android may call it after stopScan
+        self._gatt_cb = None  # retained: Android may call it during close
         self._gatt = None
         self._link_up = False
         self._loop: asyncio.AbstractEventLoop | None = None
-        # Retained for the required lifetime: Android holds raw pointers into
-        # the pyjnius objects, so they must outlive every possible callback.
-        self._scan_listener = None
-        self._scan_cb = None
-        self._gatt_listener = None
-        self._gatt_cb = None
         self._scan_on_device: Callable[[Discovered], None] | None = None
         self._scan_hits: dict[str, Discovered] = {}
         self._connect_fut: asyncio.Future | None = None
@@ -229,11 +345,18 @@ class AndroidRadio(Radio):
                 "granted BLUETOOTH_SCAN / ACCESS_FINE_LOCATION?"
             )
 
-        # Both objects stay referenced (see the lifetime note in __init__):
-        # the Java callback is registered with the stack, the Python listener
-        # is what it calls back into.
-        self._scan_listener = j["PyBleListenerImpl"](self)
-        self._scan_cb = j["PyScanCallback"](self._scan_listener)
+        # Own a session for the duration of the scan only: events carry its
+        # generation, and a scan running next to an open connection cannot
+        # steal that connection's acknowledgements (see _CallbackRouter).
+        # The bridge object is per scan, tagged with the session generation,
+        # so a late hit from a finished scan is dropped instead of landing in
+        # the next scan's results.
+        cbs = _shared_cbs()
+        router = cbs["router"]
+        generation = router.new_session(self)
+        self._generation = generation
+        scan_cb = _classes()["PyScanCallback"](cbs["listener"], generation)
+        self._scan_cb = scan_cb  # retained until the next scan replaces it
         # no system ScanFilter: the QCAR name/mfg rules live in one place
         # (radio.looks_like_qcar), and filtering in Python keeps the Java
         # surface minimal. LOW_LATENCY because the scan window is short.
@@ -243,18 +366,21 @@ class AndroidRadio(Radio):
             .setReportDelay(0)
             .build()
         )
+        # pyjnius passes Python lists as arrays, and startScan's overloads
+        # take java.util.List - so the (empty) filter list must be a real one
+        filters = j["ArrayList"]()
         try:
-            scanner.startScan([], settings, self._scan_cb)
+            scanner.startScan(filters, settings, scan_cb)
         except Exception as exc:  # SecurityException when permission missing
+            router.end_session(generation)
             raise ConnectionError(f"could not start BLE scan: {exc}") from exc
 
         try:
             await asyncio.sleep(timeout)
         finally:
             with contextlib.suppress(Exception):
-                scanner.stopScan(self._scan_cb)
-            # keep _scan_cb/_scan_listener referenced until the next scan
-            # replaces them: late deliveries must not hit a dead proxy
+                scanner.stopScan(scan_cb)
+            router.end_session(generation)
         return sorted(self._scan_hits.values(), key=lambda d: -d.rssi)
 
     # scan callbacks (binder threads, plain Python types from the bridge;
@@ -291,17 +417,28 @@ class AndroidRadio(Radio):
         if dev is None:
             raise ConnectionError(f"{address}: device not found")
 
-        j = _classes()
-        self._gatt_listener = j["PyBleListenerImpl"](self)
-        self._gatt_cb = j["PyGattCallback"](self._gatt_listener)
+        cbs = _shared_cbs()
+        # own a session *before* connectGatt: the state callback can arrive
+        # on a binder thread the moment the stack accepts the request, and it
+        # is routed by this connection's generation.  The bridge object is
+        # per connection, tagged with that generation, so a late ACK from a
+        # previous connection to the same car cannot resolve this one's
+        # pending futures or change its state (see _CallbackRouter).
+        router = cbs["router"]
+        generation = router.new_session(self)
+        self._generation = generation
+        self.address = address
+        gatt_cb = _classes()["PyGattCallback"](cbs["listener"], generation)
+        self._gatt_cb = gatt_cb  # retained until the next connect replaces it
         self._connect_fut = self._loop.create_future()
         # TRANSPORT_LE: the cars are BLE-only; without this some dual-mode
         # phones try BR/EDR first and the connect just hangs.
         try:
             self._gatt = dev.connectGatt(
-                self._activity(), False, self._gatt_cb, TRANSPORT_LE
+                self._activity(), False, gatt_cb, TRANSPORT_LE
             )
         except Exception as exc:  # SecurityException without BLUETOOTH_CONNECT
+            router.end_session(generation)
             raise ConnectionError(
                 f"could not connect to {address}: {exc} - is the app granted "
                 "BLUETOOTH_CONNECT?"
@@ -325,8 +462,14 @@ class AndroidRadio(Radio):
         self._link_up = False
         self._notify_cb = None
         self._chars.clear()
-        # _gatt_cb/_gatt_listener stay referenced: Android may still invoke
-        # the callback during/after close, and the next connect replaces them
+        # release session ownership *before* closing: later events for this
+        # generation (late ACKs from the closing link) are dropped by the
+        # router instead of being delivered to whatever radio touches the
+        # stack next - including a reconnect to the same car address
+        if self._generation is not None and _shared is not None:
+            _shared["router"].end_session(self._generation)
+        # the bridge object stays referenced on the radio: Android may still
+        # invoke it during/after close
         if gatt is not None:
             with contextlib.suppress(Exception):
                 gatt.disconnect()

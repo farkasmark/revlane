@@ -69,6 +69,13 @@ def _run_android() -> None:
     _request_ble_permissions()
     if not os.environ.get("QCAR_RADIO"):
         os.environ["QCAR_RADIO"] = "mock" if _on_emulator() else "android"
+    if os.environ["QCAR_RADIO"] == "android":
+        # must happen on this (bootstrap/Java-attached) thread: worker
+        # threads attach to the JVM without a classloader context and
+        # cannot resolve our android-src bridge classes - see prime()
+        from qcar import radio_android
+
+        radio_android.prime()
     # p4a never sets HOME, and an app uid has no passwd entry, so
     # expanduser("~") stays a literal "~" - give libraries that do the sane
     # writable directory (qcar/profiles.py handles it explicitly itself)

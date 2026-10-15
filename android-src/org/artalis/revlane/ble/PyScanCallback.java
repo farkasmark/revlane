@@ -12,16 +12,23 @@ import android.util.SparseArray;
  * event to the Python {@link PyBleListener}, flattening the ScanResult into
  * plain types on the Java side.
  *
- * Lifetime: the Python radio holds a reference to this object for as long as
- * the scan is registered; instances must not be garbage collected while
- * Android may still call into them.
+ * One instance per scan session, constructed with the session's generation
+ * token; every forwarded event leads with it, so the Python router can drop
+ * late events from an already-ended scan instead of delivering them to
+ * whichever radio scans next.
+ *
+ * Lifetime: the Python radio retains this object for as long as the scan is
+ * registered (and until the next scan replaces it); instances must not be
+ * garbage collected while Android may still call into them.
  */
 public class PyScanCallback extends ScanCallback {
 
     private final PyBleListener listener;
+    private final long generation;
 
-    public PyScanCallback(PyBleListener listener) {
+    public PyScanCallback(PyBleListener listener, long generation) {
         this.listener = listener;
+        this.generation = generation;
     }
 
     @Override
@@ -48,7 +55,7 @@ public class PyScanCallback extends ScanCallback {
                 mfgId = sa.keyAt(0);  // id only - the data bytes are never used
             }
         }
-        listener.onScanHit(address, name, result.getRssi(), mfgId);
+        listener.onScanHit(generation, address, name, result.getRssi(), mfgId);
     }
 
     @Override
@@ -64,7 +71,7 @@ public class PyScanCallback extends ScanCallback {
     @Override
     public void onScanFailed(int errorCode) {
         if (listener != null) {
-            listener.onScanFailed(errorCode);
+            listener.onScanFailed(generation, errorCode);
         }
     }
 }

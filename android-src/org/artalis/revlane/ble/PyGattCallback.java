@@ -9,7 +9,8 @@ import android.bluetooth.BluetoothGattDescriptor;
 /**
  * Extends the framework's abstract BluetoothGattCallback (pyjnius can only
  * implement interfaces) and forwards GATT events to the Python {@link
- * PyBleListener}, keyed by the remote device address and characteristic UUID.
+ * PyBleListener}, keyed by the session generation, the remote device address
+ * and the characteristic UUID.
  *
  * Only the *legacy* onCharacteristicChanged(BluetoothGatt,
  * BluetoothGattCharacteristic) overload is overridden on purpose: the app
@@ -17,14 +18,23 @@ import android.bluetooth.BluetoothGattDescriptor;
  * replays the value into the characteristic. If the targetSdk ever moves to
  * 33+, add the byte[] overloads here (see qcar/radio_android.py).
  *
- * Lifetime: the Python radio retains this object for the whole connection.
+ * One instance per connection session, constructed with the session's
+ * generation token. Sequential connections to the same car address are
+ * otherwise indistinguishable to the Python router: a late ACK from the
+ * closed connection would resolve the next connection's pending write
+ * future. With the token, stale-session events are dropped.
+ *
+ * Lifetime: the Python radio retains this object for the whole connection
+ * (and until the next connection replaces it).
  */
 public class PyGattCallback extends BluetoothGattCallback {
 
     private final PyBleListener listener;
+    private final long generation;
 
-    public PyGattCallback(PyBleListener listener) {
+    public PyGattCallback(PyBleListener listener, long generation) {
         this.listener = listener;
+        this.generation = generation;
     }
 
     @Override
@@ -33,7 +43,7 @@ public class PyGattCallback extends BluetoothGattCallback {
             return;
         }
         BluetoothDevice dev = gatt.getDevice();
-        listener.onGattState(address(dev), status, newState);
+        listener.onGattState(generation, address(dev), status, newState);
     }
 
     @Override
@@ -41,7 +51,7 @@ public class PyGattCallback extends BluetoothGattCallback {
         if (listener == null || gatt == null) {
             return;
         }
-        listener.onServicesDiscovered(address(gatt.getDevice()), status);
+        listener.onServicesDiscovered(generation, address(gatt.getDevice()), status);
     }
 
     @Override
@@ -51,7 +61,7 @@ public class PyGattCallback extends BluetoothGattCallback {
         if (listener == null) {
             return;
         }
-        listener.onCharacteristicWrite(addressOf(gatt), uuid(characteristic), status);
+        listener.onCharacteristicWrite(generation, addressOf(gatt), uuid(characteristic), status);
     }
 
     @Override
@@ -61,7 +71,7 @@ public class PyGattCallback extends BluetoothGattCallback {
         if (listener == null) {
             return;
         }
-        listener.onDescriptorWrite(addressOf(gatt), uuid(descriptor), status);
+        listener.onDescriptorWrite(generation, addressOf(gatt), uuid(descriptor), status);
     }
 
     @Override
@@ -71,7 +81,7 @@ public class PyGattCallback extends BluetoothGattCallback {
             return;
         }
         byte[] value = characteristic.getValue();
-        listener.onNotify(addressOf(gatt), uuid(characteristic), value);
+        listener.onNotify(value, generation, addressOf(gatt), uuid(characteristic));
     }
 
     // null strings must never cross into pyjnius: GetStringChars on a NULL

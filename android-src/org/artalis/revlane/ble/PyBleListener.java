@@ -9,6 +9,16 @@ package org.artalis.revlane.ble;
  * abstract classes - hence this interface plus the two bridge classes in
  * this package that extend the framework callbacks and delegate here.
  *
+ * Every method leads with a **generation**: a session token the Python side
+ * allocates per scan/connection and stamps into the bridge object at
+ * creation time (PyScanCallback / PyGattCallback constructors). Sequential
+ * sessions to the same car address are otherwise indistinguishable - a late
+ * ACK from a closed connection would resolve the *next* connection's pending
+ * write future, and a late onGattState would corrupt its link state. With
+ * the token, an event from an ended session is a stale-generation lookup
+ * miss on the Python side and is dropped. Callers MUST forward the
+ * generation they were constructed with, unmodified.
+ *
  * Everything arrives on binder threads; the Python side re-marshals onto its
  * own asyncio loop. All arguments are plain types so pyjnius has an easy job.
  * The scan callback carries only the manufacturer ID (never the data bytes):
@@ -19,25 +29,26 @@ package org.artalis.revlane.ble;
 public interface PyBleListener {
 
     /** One advertisement, unfiltered; mfgId &lt; 0 means absent. */
-    void onScanHit(String address, String name, int rssi, int mfgId);
+    void onScanHit(long generation, String address, String name, int rssi, int mfgId);
 
     /** The scan itself failed (see ScanCallback.OnScanFailed* constants). */
-    void onScanFailed(int errorCode);
+    void onScanFailed(long generation, int errorCode);
 
     /** Connection state changed; newState uses BluetoothProfile.STATE_*. */
-    void onGattState(String address, int status, int newState);
+    void onGattState(long generation, String address, int status, int newState);
 
     /** Service discovery finished; status 0 == success. */
-    void onServicesDiscovered(String address, int status);
+    void onServicesDiscovered(long generation, String address, int status);
 
     /** ACKed write completed; status != 0 means the car rejected the frame. */
-    void onCharacteristicWrite(String address, String charUuid, int status);
+    void onCharacteristicWrite(long generation, String address, String charUuid, int status);
 
     /** CCCD write completed (notification subscribe). */
-    void onDescriptorWrite(String address, String charUuid, int status);
+    void onDescriptorWrite(long generation, String address, String charUuid, int status);
 
-    /** Notification payload from a characteristic.
-     *  (String, String, byte[]) - no primitives before the array: the one
-     *  byte[] shape pyjnius marshals reliably; matches onNotify above. */
-    void onNotify(String address, String charUuid, byte[] value);
+    /** Notification payload from a characteristic.  The byte[] comes first
+     *  on purpose: pyjnius corrupts ByteArray wrappers when primitives
+     *  precede the array (seen in the bridge self-test), so nothing may sit
+     *  before it. */
+    void onNotify(byte[] value, long generation, String address, String charUuid);
 }

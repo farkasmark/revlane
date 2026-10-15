@@ -87,8 +87,11 @@ def main() -> None:
     full = _classes()
     check("radio._classes() registers PyBleListenerImpl", lambda: full["PyBleListenerImpl"])
     listener = full["PyBleListenerImpl"](radio)
-    scan_cb = full["PyScanCallback"](listener)
-    gatt_cb = full["PyGattCallback"](listener)
+    # one bridge object per session, tagged with its generation - the same
+    # shape production traffic has (scan()/connect() create these)
+    SCAN_GEN, GATT_GEN = 7700, 8800
+    scan_cb = full["PyScanCallback"](listener, SCAN_GEN)
+    gatt_cb = full["PyGattCallback"](listener, GATT_GEN)
     check("PyBleListener proxy created", lambda: type(listener).__name__)
 
     def supername(cb):
@@ -129,36 +132,40 @@ def main() -> None:
 
     # every argument is constructed on the JAVA side - the same direction
     # production traffic flows (framework-created byte[], one JNI boundary);
-    # each callback is fired with asserted, distinct values
-    check("onNotify (String,String,byte[])",
-          fired("notify", ("AA:11", SERVICE_UUID, b"\x01\x5a"),
-                lambda: shim.fireNotify(listener, 1)))
+    # each callback is fired with asserted, distinct values, including the
+    # session generation every method leads with
+    check("onNotify (byte[],long,String,String)",
+          fired("notify", (b"\x01\x5a", GATT_GEN, "AA:11", SERVICE_UUID),
+                lambda: shim.fireNotify(listener, GATT_GEN, 1)))
     check("onNotify again (repeated dispatch)",
-          fired("notify", ("AA:11", SERVICE_UUID, b"\x02\x5a"),
-                lambda: shim.fireNotify(listener, 2)))
+          fired("notify", (b"\x02\x5a", GATT_GEN, "AA:11", SERVICE_UUID),
+                lambda: shim.fireNotify(listener, GATT_GEN, 2)))
 
-    check("onScanHit (String,String,int,int)",
-          fired("scan", ("AA:11", "QCAR-1234", -40, 0x5452),
-                lambda: shim.fireScanHit(listener)))
+    check("onScanHit (long,String,String,int,int)",
+          fired("scan", (SCAN_GEN, "AA:11", "QCAR-1234", -40, 0x5452),
+                lambda: shim.fireScanHit(listener, SCAN_GEN)))
     check("onScanHit no-name (Java coerces null to \"\")",
-          fired("scan", ("BB:22", "", -50, -1),
-                lambda: shim.fireScanHitNoName(listener)))
-    check("onScanFailed (int)",
-          fired("failed", 3, lambda: shim.fireScanFailed(listener)))
-    check("onGattState (String,int,int)",
-          fired("conn", ("AA:11", 8, 0), lambda: shim.fireGattState(listener)))
-    check("onServicesDiscovered (String,int)",
-          fired("services", ("AA:11", 0), lambda: shim.fireServicesDiscovered(listener)))
-    check("onCharacteristicWrite (String,String,int)",
-          fired("write", ("AA:11", SERVICE_UUID, 0),
-                lambda: shim.fireCharacteristicWrite(listener)))
-    check("onDescriptorWrite (String,String,int)",
-          fired("desc", ("AA:11", CCCD, 0),
-                lambda: shim.fireDescriptorWrite(listener)))
+          fired("scan", (SCAN_GEN, "BB:22", "", -50, -1),
+                lambda: shim.fireScanHitNoName(listener, SCAN_GEN)))
+    check("onScanFailed (long,int)",
+          fired("failed", (SCAN_GEN, 3), lambda: shim.fireScanFailed(listener, SCAN_GEN)))
+    check("onGattState (long,String,int,int)",
+          fired("conn", (GATT_GEN, "AA:11", 8, 0),
+                lambda: shim.fireGattState(listener, GATT_GEN)))
+    check("onServicesDiscovered (long,String,int)",
+          fired("services", (GATT_GEN, "AA:11", 0),
+                lambda: shim.fireServicesDiscovered(listener, GATT_GEN)))
+    check("onCharacteristicWrite (long,String,String,int)",
+          fired("write", (GATT_GEN, "AA:11", SERVICE_UUID, 0),
+                lambda: shim.fireCharacteristicWrite(listener, GATT_GEN)))
+    check("onDescriptorWrite (long,String,String,int)",
+          fired("desc", (GATT_GEN, "AA:11", CCCD, 0),
+                lambda: shim.fireDescriptorWrite(listener, GATT_GEN)))
 
     def via_bridge_object():
         scan_cb.onScanFailed(4)  # real PyScanCallback -> listener -> Python
-        assert rec["failed"] == 4, rec["failed"]
+        # the callback object stamps its own session generation
+        assert rec["failed"] == (SCAN_GEN, 4), rec["failed"]
         return rec["failed"]
 
     check("PyScanCallback.onScanFailed forwards to Python", via_bridge_object)
