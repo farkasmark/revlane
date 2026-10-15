@@ -59,11 +59,17 @@ class KeyState:
             self._last_key[key] = now
             if key in PLAIN:
                 action = PLAIN[key]
-                if now - prev < self.repeat_block:
-                    return  # keyboard auto-repeat
                 if self.mode == "toggle":
+                    # auto-repeat must not re-trigger a toggle; keeping
+                    # _last_key fresh (above, unconditionally) is what
+                    # suppresses a whole held-key burst
+                    if now - prev < self.repeat_block:
+                        return
                     self._flags[action] = not self._flags.get(action, False)
                 else:
+                    # hold mode lives off auto-repeat: every repeat of the
+                    # held key is a keep-alive and refreshes the hold, so a
+                    # held key stays alive well past hold_ttl
                     self._flags[action] = True
                     self._flags["_t_" + action] = now
                 self._exclusive(action)

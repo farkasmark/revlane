@@ -1,5 +1,7 @@
 """Keyboard mapping logic, testable without a TTY."""
 
+import pytest
+
 from qcar.input_kbd import CSI, KeyState, _parse
 
 
@@ -101,3 +103,97 @@ def test_arrow_drives_the_same_flag_as_letter():
     for key in _parse(b"\x1b[A"):
         st.handle(key)
     assert st.command().forward
+
+
+# --------------------------------------------------------------------------
+# auto-repeat timing (regression: repeat suppression used to skip the hold
+# timestamp refresh, killing held keys after one repeat_block)
+
+class _Clock:
+    """Scriptable stand-in for time.monotonic() inside qcar.input_kbd."""
+
+    def __init__(self, t: float = 0.0) -> None:
+        self.t = t
+
+    def monotonic(self) -> float:
+        return self.t
+
+    def advance(self, dt: float) -> None:
+        self.t += dt
+
+
+@pytest.fixture()
+def clock(monkeypatch):
+    # start at 1.0 like a real monotonic clock (uptime): at exactly 0.0 a
+    # first keypress looks like a repeat (prev defaults to 0.0)
+    c = _Clock(1.0)
+    monkeypatch.setattr("qcar.input_kbd.time", c)
+    return c
+
+
+def test_hold_survives_realistic_repeat_beyond_ttl(clock):
+    # a real keyboard repeats ~30 times/s after a ~0.5 s initial delay;
+    # the whole point of hold mode is that this keeps the key alive
+    st = KeyState(mode="hold", hold_ttl=0.55, repeat_block=0.12)
+    st.handle("w")  # press at t=0
+    assert st.command().forward
+    clock.advance(0.5)  # initial repeat delay
+    for _ in range(37):  # 1.5 s of 40 ms repeats -> 2.0 s total, >> hold_ttl
+        clock.advance(0.04)
+        st.handle("w")
+        assert st.command().forward, f"held key died at t={clock.t:.2f}"
+
+
+def test_hold_expires_when_repeats_stop(clock):
+    st = KeyState(mode="hold", hold_ttl=0.55, repeat_block=0.12)
+    st.handle("w")
+    clock.advance(0.5)
+    for _ in range(25):  # hold for a second via repeats
+        clock.advance(0.04)
+        st.handle("w")
+    assert st.command().forward
+    clock.advance(0.6)  # ...then the user lets go: no more repeats
+    assert not st.command().forward, "hold must expire once repeats stop"
+    st.handle("w")  # a fresh press revives it
+    assert st.command().forward
+
+
+def test_hold_refreshes_on_arrow_repeats_too(clock):
+    st = KeyState(mode="hold", hold_ttl=0.55, repeat_block=0.12)
+    for key in _parse(b"\x1b[A"):  # arrow press
+        st.handle(key)
+    clock.advance(0.5)
+    for _ in range(25):
+        clock.advance(0.04)
+        st.handle("w")  # same flag, letter repeat
+    assert st.command().forward
+
+
+def test_toggle_mode_ignores_long_autorepeat_burst(clock):
+    st = KeyState(mode="toggle", repeat_block=0.12)
+    st.handle("w")  # press: on
+    clock.advance(0.04)
+    for _ in range(25):  # key held for a second, repeats keep coming
+        clock.advance(0.04)
+        st.handle("w")
+        assert st.command().forward, "repeat leaked through: toggled off"
+    clock.advance(0.2)  # past repeat_block: this is a genuine new press
+    st.handle("w")
+    assert not st.command().forward
+
+
+def test_hold_opposite_exclusion_survives_repeats(clock):
+    st = KeyState(mode="hold", hold_ttl=0.55, repeat_block=0.12)
+    st.handle("w")
+    clock.advance(0.4)
+    st.handle("w")  # keep forward alive
+    st.handle("s")  # press backward: excludes forward
+    assert st.command().backward and not st.command().forward
+    clock.advance(0.4)
+    for _ in range(10):  # only 's' keeps repeating now
+        clock.advance(0.04)
+        st.handle("s")
+    assert st.command().backward, "held 's' must stay alive via repeats"
+    assert not st.command().forward, "'w' was never released-and-repressed"
+    clock.advance(0.6)  # repeats stop entirely
+    assert not st.command().backward and not st.command().forward

@@ -174,19 +174,29 @@ class QCar:
         ``get_command`` is polled every ``interval`` seconds.  Returning
         ``None``, or a watchdog expiry of more than ``watchdog`` seconds
         without a *changed* frame, degrades to ``idle`` (stopped).
+
+        The watchdog latches: once it fires, ``idle`` keeps going out until
+        the feeder produces a *different* command.  Re-issuing the stale one
+        must not bring the car back to life, or a wedged feeder would
+        alternate drive/stop forever instead of stopping - so input changes
+        and transmitted fallbacks are tracked separately.
         """
         stop_event = stop_event or asyncio.Event()
-        last_seen: Command | None = None
-        last_change = time.monotonic()
+        last_input: Command | None = None   # what the feeder last produced
+        last_change = time.monotonic()      # when the input last changed
+        expired = False                     # watchdog fired; stay idle
         while not stop_event.is_set():
             try:
                 cmd = get_command()
-                if cmd is None or (watchdog and time.monotonic() - last_change > watchdog):
-                    cmd = idle
-                if cmd != last_seen:
-                    last_seen = cmd
+                if cmd != last_input:
+                    last_input = cmd
                     last_change = time.monotonic()
-                await self.write(cmd)
+                    expired = False
+                if watchdog is not None and not expired and \
+                        time.monotonic() - last_change > watchdog:
+                    expired = True
+                out = idle if (cmd is None or expired) else cmd
+                await self.write(out)
             except Exception as exc:  # link died -> let the caller decide
                 log.warning("write failed: %s", exc)
                 return

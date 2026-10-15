@@ -7,12 +7,19 @@ source.include_exts = py,png,jpg,md,txt
 source.exclude_dirs = tests,tools,docs,.venv,.pytest_cache,.ruff_cache,build,.buildozer,revlane.egg-info
 
 # SDL2 garage + drive pad: pygame recipe pulls sdl2, sdl2_ttf, sdl2_image,
-# sdl2_mixer; cryptography pulls openssl + cffi (Rust build).
-requirements = python3,pygame,cryptography
+# sdl2_mixer; cryptography pulls openssl + cffi (Rust build); pyjnius is the
+# Java bridge for the real (non-mock) BLE transport - the emulator's mock
+# radio never imports it, so the bridge self-test is what catches it missing
+requirements = python3,pygame,cryptography,pyjnius
 
 # pygame 2.1.0's Cython-generated C needs a CPython 3.12+ fix - see
 # android-recipes/pygame/__init__.py
 p4a.local_recipes = android-recipes
+
+# Java side of the BLE bridge: ScanCallback/BluetoothGattCallback are
+# abstract classes (pyjnius can only implement interfaces), so these extend
+# them and forward events to Python - see qcar/radio_android.py
+android.add_src = android-src
 
 version = 0.1.0
 orientation = landscape
