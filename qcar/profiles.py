@@ -25,6 +25,12 @@ ACCENTS = ("#ffb300", "#e53935", "#1e88e5", "#43a047", "#8e24aa", "#00acc1", "#f
 
 
 def default_path() -> Path:
+    if os.environ.get("ANDROID_ARGUMENT"):
+        # inside the APK: HOME is unset and expanduser("~") is a literal
+        # "~" with no passwd entry behind it - p4a points ANDROID_PRIVATE at
+        # the app's writable files directory, so hang config off that
+        base = Path(os.environ.get("ANDROID_PRIVATE") or os.environ["ANDROID_ARGUMENT"])
+        return base / ".config" / CONFIG_DIR / "profiles.json"
     base = Path(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"))
     return base / CONFIG_DIR / "profiles.json"
 

@@ -24,8 +24,9 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Future
 
-from ..car import STOP, QCar, is_qcar
+from ..car import STOP, QCar
 from ..protocol import Command, Telemetry
+from ..radio import make_radio
 
 IDLE = "offline"
 SCANNING = "scanning"
@@ -141,33 +142,30 @@ class CarBackend:
     # ---- work ----------------------------------------------------------
 
     async def _do_scan(self, timeout: float) -> list[Discovered]:
-        from bleak import BleakScanner
-
         self.state = SCANNING
         self.error = ""
         self.found = []
         hits: dict[str, Discovered] = {}
 
-        def on_adv(dev, adv) -> None:
-            if not is_qcar(dev, adv):
-                return
+        def on_adv(dev) -> None:
+            # dev is a radio.Discovered sighting; the radio has already
+            # filtered it down to plausible QCARs.
             hits[dev.address] = Discovered(
                 address=dev.address,
-                name=dev.name or getattr(adv, "local_name", None) or dev.address,
-                rssi=getattr(adv, "rssi", 0) or 0,
+                name=dev.name or dev.address,
+                rssi=dev.rssi,
             )
-            # Publish as we hear them. `discover()` only hands back results when
-            # the whole scan finishes, which leaves the UI blank for seconds and
-            # makes a weak, far-away car look absent when it is merely quiet.
-            # Rebinding the list is atomic, so readers never see a torn one.
+            # Publish as we hear them. Waiting for the scan to finish would
+            # leave the UI blank for seconds and makes a weak, far-away car
+            # look absent when it is merely quiet. Rebinding the list is
+            # atomic, so readers never see a torn one.
             self.found = sorted(hits.values(), key=lambda d: -d.rssi)
 
-        scanner = BleakScanner(detection_callback=on_adv, adapter=self.adapter)
         try:
-            await scanner.start()
-            await asyncio.sleep(timeout)
+            await make_radio(adapter=self.adapter).scan(
+                timeout=timeout, on_device=on_adv
+            )
         finally:
-            await scanner.stop()
             self.state = CONNECTED if self._car and self._car.connected else IDLE
         out = self.found
         self.on_event("scan", f"{len(out)} car(s) in range")

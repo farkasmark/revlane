@@ -1,4 +1,10 @@
-"""Async BLE client for Brandbase "QCAR" cars."""
+"""Async BLE client for Brandbase "QCAR" cars.
+
+The radio itself is behind ``qcar.radio``: bleak over BlueZ on the desktop,
+pyjnius over Android's BluetoothGatt inside the APK, and a virtual mock car
+for the emulator and CI. Everything here - frames, retries, the watchdog - is
+transport-agnostic.
+"""
 
 from __future__ import annotations
 
@@ -8,15 +14,16 @@ import logging
 import time
 from collections.abc import Callable, Iterable
 
-from bleak import BleakClient, BleakScanner
-from bleak.backends.characteristic import BleakGATTCharacteristic
-from bleak.backends.device import BLEDevice
-
 from .protocol import Command, Telemetry, parse_telemetry
+from .radio import (  # noqa: F401  (re-exported, used across the codebase)
+    SERVICE_UUID,
+    Discovered,
+    looks_like_qcar,
+    make_radio,
+)
 
 log = logging.getLogger("qcar")
 
-SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb"
 CMD_CHAR_UUID = "d44bc439-abfd-45a2-b575-925416129600"
 TEL_CHAR_UUID = "d44bc439-abfd-45a2-b575-925416129601"
 
@@ -33,34 +40,20 @@ MANUFACTURER_IDS = (0x5452, 0x5254)
 STOP = Command()
 
 
-def is_qcar(device: BLEDevice, adv=None) -> bool:
+def is_qcar(device, adv=None) -> bool:
+    """Does a scanned device look like a QCAR? (bleak-shaped objects)"""
     name = (device.name or (adv and getattr(adv, "local_name", None)) or "")
-    if name.upper().startswith(NAME_PREFIX):
-        return True
     mfg = {}
     if adv is not None:
         mfg = getattr(adv, "manufacturer_data", None) or {}
-    return any(mid in mfg for mid in MANUFACTURER_IDS)
+    return looks_like_qcar(name, mfg)
 
 
-async def find(timeout: float = 8.0, *, adapter: str | None = None) -> list[BLEDevice]:
+async def find(
+    timeout: float = 8.0, *, adapter: str | None = None
+) -> list[Discovered]:
     """Scan for QCAR cars. Returns every plausible candidate."""
-    devices = await BleakScanner.discover(
-        timeout=timeout,
-        adapter=adapter,
-        return_adv=True,
-    )
-    out = []
-    for dev, adv in devices.values():
-        if is_qcar(dev, adv):
-            out.append(dev)
-    return out
-
-
-async def find_by_address(
-    address: str, timeout: float = 20.0, *, adapter: str | None = None
-) -> BLEDevice | None:
-    return await BleakScanner.find_device_by_address(address, timeout=timeout, adapter=adapter)
+    return await make_radio(adapter=adapter).scan(timeout=timeout)
 
 
 class QCar:
@@ -76,18 +69,15 @@ class QCar:
         self,
         address: str | None = None,
         *,
-        device: BLEDevice | None = None,
         adapter: str | None = None,
         scan_timeout: float = 20.0,
     ) -> None:
-        if device is None and not address:
-            raise ValueError("need an address or a BLEDevice")
-        self.address = (address or device.address).upper()
-        self._device = device
+        if not address:
+            raise ValueError("need an address")
+        self.address = address.upper()
         self._adapter = adapter
         self._scan_timeout = scan_timeout
-        self._client: BleakClient | None = None
-        self._cmd_char: BleakGATTCharacteristic | None = None
+        self._radio = None
         self._listeners: list[Callable[[Telemetry], None]] = []
         self.telemetry: Telemetry | None = None
         self.last_tx = 0.0
@@ -104,42 +94,25 @@ class QCar:
 
     @property
     def connected(self) -> bool:
-        return bool(self._client and self._client.is_connected)
+        return bool(self._radio and self._radio.connected)
 
     async def connect(self) -> None:
-        if self._device is None:
-            self._device = await find_by_address(
-                self.address, self._scan_timeout, adapter=self._adapter
-            )
-            if self._device is None:
-                raise ConnectionError(
-                    f"{self.address} not advertising. Is the car switched on? "
-                    "If another program still holds the link, close it and "
-                    "power-cycle the car."
-                )
-        self._client = BleakClient(self._device, adapter=self._adapter, timeout=30)
-        await self._client.connect()
-        self._cmd_char = self._client.services.get_characteristic(CMD_CHAR_UUID)
-        if self._cmd_char is None:
-            raise ConnectionError("car is connected but service fff0/char 9600 is missing")
+        self._radio = make_radio(adapter=self._adapter)
+        await self._radio.connect(self.address, timeout=self._scan_timeout)
         await self._enable_notifications()
         log.info("connected to %s", self.address)
 
     async def disconnect(self) -> None:
-        if self._client is not None:
+        if self._radio is not None:
             with contextlib.suppress(Exception):
                 await self.write(STOP)  # make sure we leave it stopped
             with contextlib.suppress(Exception):
-                await self._client.disconnect()
-            self._client = None
+                await self._radio.disconnect()
+            self._radio = None
 
     async def _enable_notifications(self) -> None:
-        tel = self._client.services.get_characteristic(TEL_CHAR_UUID)
-        if tel is None:
-            return
-
-        def _cb(_char, data: bytearray) -> None:
-            t = parse_telemetry(bytes(data))
+        def _cb(data: bytes) -> None:
+            t = parse_telemetry(data)
             if t is not None:
                 self.telemetry = t
                 for fn in self._listeners:
@@ -147,7 +120,7 @@ class QCar:
                         fn(t)
 
         with contextlib.suppress(Exception):
-            await self._client.start_notify(tel, _cb)
+            await self._radio.start_notify(TEL_CHAR_UUID, _cb)
 
     def add_telemetry_listener(self, fn: Callable[[Telemetry], None]) -> None:
         self._listeners.append(fn)
@@ -169,11 +142,11 @@ class QCar:
         instead of a quiet drop), at the cost of one round trip per frame -
         ~45 ms on the car's preferred connection interval, so ~22 Hz.
         """
-        assert self._client is not None and self._cmd_char is not None
+        assert self._radio is not None
         frame = cmd.encrypt()
         if response is None:
             response = True
-        await self._client.write_gatt_char(self._cmd_char, frame, response=response)
+        await self._radio.write(CMD_CHAR_UUID, frame, response=response)
         self.last_tx = time.monotonic()
         self.tx_count += 1
 
@@ -184,11 +157,8 @@ class QCar:
         char_uuid: str = CMD_CHAR_UUID,
         response: bool = True,
     ) -> None:
-        assert self._client is not None
-        ch = self._client.services.get_characteristic(char_uuid)
-        if ch is None:
-            raise ValueError(f"characteristic {char_uuid} not found")
-        await self._client.write_gatt_char(ch, data, response=response)
+        assert self._radio is not None
+        await self._radio.write(char_uuid, data, response=response)
 
     async def stream(
         self,
@@ -248,6 +218,6 @@ async def connected(*args, **kwargs):
         await car.disconnect()
 
 
-def first(devices: Iterable[BLEDevice]) -> BLEDevice | None:
+def first(devices: Iterable[Discovered]) -> Discovered | None:
     devices = list(devices)
     return devices[0] if devices else None

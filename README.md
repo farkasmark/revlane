@@ -111,19 +111,48 @@ Safety in the GUI:
 - the radio thread has its own watchdog: if the render loop wedges for >0.5 s,
   it stops forwarding your intent and pushes STOP
 
-### Mobile
+### Mobile / APK
 
-Straight answer: **the GUI runs on Linux/Windows/macOS today; on Android it runs
-but cannot see the radio yet.** SDL2 (pygame-ce) has an Android path via
-python-for-android, but `bleak` has no Android backend — Android BLE needs the
-Java `BluetoothLeScanner`/`BluetoothGatt` API, so an APK needs a small JNI/`android`
-module bridge in front of `CarBackend`. The scenes talk to the backend only
-through its tiny interface (`scan/connect/disconnect/set_intent` + polled
-state), so that bridge is the only missing piece — no UI rework.
+There is now an Android APK (`buildozer.spec`, `main.py`), and the radio sits
+behind a transport seam (`qcar/radio.py`) with three backends:
 
-The practical answer on a phone is the **[web controller](#web-controller--drive-it-from-your-phone)**
-below: the radio stays on a Linux box and only the touch pad runs on your phone,
-so it works on Android *and* iOS with nothing installed.
+| backend | platform | stack |
+|-----------|------------|--------------------------------------------|
+| `bleak` | Linux et al. | bleak → D-Bus → BlueZ (unchanged behaviour) |
+| `android` | the APK | pyjnius → `BluetoothGatt` (ACKed writes!) |
+| `mock` | emulator, CI | in-process virtual car (`qcar/radio_mock.py`) |
+
+`QCAR_RADIO=bleak|android|mock` overrides; otherwise the APK uses `android`
+and the desktop uses `bleak`. The GUI, CLI and drive loop are untouched above
+the seam.
+
+Build the APK (first build downloads the SDK/NDK and compiles Python + recipes;
+expect tens of minutes):
+
+```bash
+.venvs/buildozer/bin/buildozer android debug      # -> bin/revlane-*-debug.apk
+```
+
+Two p4a recipe fixes ship in `android-recipes/` (wired via
+`p4a.local_recipes`): pygame bumped to 2.6.1 (2.1.0's Cython-0.29-generated C
+cannot compile against CPython 3.14) plus its missing SIMD blitter sources,
+Cython bumped to 3.1.x, and a `-lpython3.14` link fix for cryptography's abi3
+Rust extension. Drop them when p4a fixes these upstream.
+
+Testing:
+
+- **Emulator**: the Android emulator has **no Bluetooth at all** — no virtual
+  HCI, no host passthrough. `main.py` detects an emulator and defaults to the
+  mock car, so the whole app is testable end to end minus the radio.
+- **Real phone**: `adb install bin/revlane-*-debug.apk`, grant the Bluetooth
+  permissions, and the `android` backend talks to the car directly. BLE runtime
+  permissions are requested at launch; the transport targets SDK 31 (see the
+  note in `qcar/radio_android.py` before bumping to 33+).
+
+The practical answer on a phone is still also the
+**[web controller](#web-controller--drive-it-from-your-phone)** below: the radio
+stays on a Linux box and only the touch pad runs on your phone, so it works on
+Android *and* iOS with nothing installed.
 
 ### Headless rendering (CI / design review)
 
