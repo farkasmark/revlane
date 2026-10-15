@@ -285,3 +285,19 @@ def test_quit_event_shuts_down(make_app):
     pump(app, 2)
     pygame.event.post(pygame.event.Event(pygame.QUIT))
     assert not app.step()
+
+
+# ------------------------------------------------------------------ base scene
+
+def test_base_scene_draw_fills_with_theme_bg():
+    """Regression: Scene.draw used to fill with a nonexistent Theme.BG
+    (colours are module constants) - latent AttributeError for any scene
+    that ever relied on the base implementation."""
+    from qcar.gui import theme as T
+    from qcar.gui.base import Scene
+
+    pygame.init()
+    surf = pygame.Surface((40, 30))
+    surf.fill((255, 0, 255))
+    Scene(object()).draw(surf, T.Theme(40, 30))
+    assert surf.get_at((0, 0))[:3] == T.BG

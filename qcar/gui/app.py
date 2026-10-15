@@ -177,7 +177,10 @@ class App:
             if ev.key == pygame.K_F11:
                 pygame.display.toggle_fullscreen()
                 return True
-            return bool(self.scene.key_down(ev)) or True
+            # key_down has side effects (scene state) whether or not it
+            # "consumed" the key; returning True keeps the app running
+            self.scene.key_down(ev)
+            return True
         if ev.type == pygame.KEYUP:
             self.scene.key_up(ev)
             return True

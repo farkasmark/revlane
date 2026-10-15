@@ -317,11 +317,18 @@ class GarageScene(Scene):
         rounded(surf, r, T.PANEL, th.radius, border=1, border_color=T.LINE)
         self.nearby = []
         if not found:
-            # do not accuse the car of being off while we are still listening
-            msg = "listening for cars..." if state == "scanning" else \
-                "no cars in range - is one switched on?"
+            # do not accuse the car of being off while we are still listening,
+            # and never swallow a failed scan - state == ERROR used to be
+            # indistinguishable from an empty scan, which hid real failures
+            err = self.app.backend.error
+            if state == "scanning":
+                msg, col = "listening for cars...", T.FAINT
+            elif state == "error" and err:
+                msg, col = f"scan failed: {err}", T.WARN
+            else:
+                msg, col = "no cars in range - is one switched on?", T.FAINT
             mf = th.font.get(th.fs(21))
-            img = mf.render(msg, True, T.FAINT)
+            img = mf.render(msg, True, col)
             surf.blit(img, img.get_rect(center=r.center))
             return
         x = r.x + int(12 * th.scale)

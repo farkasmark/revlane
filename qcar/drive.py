@@ -99,7 +99,8 @@ class DriveLoop:
                 pass
             await asyncio.sleep(0.5 * attempt)
             try:
-                self.car._device = None
+                # QCar.connect() builds a fresh transport, which is all the
+                # reset a post-seam car needs
                 await self.car.connect()
                 # Best-effort stop frame. It is fine if this fails: the car has
                 # already gone limp because the frame stream paused, and

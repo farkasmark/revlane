@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import logging
 import queue
 import threading
 import time
@@ -27,6 +28,8 @@ from concurrent.futures import Future
 from ..car import STOP, QCar
 from ..protocol import Command, Telemetry
 from ..radio import make_radio
+
+log = logging.getLogger("qcar.backend")
 
 IDLE = "offline"
 SCANNING = "scanning"
@@ -142,6 +145,7 @@ class CarBackend:
     # ---- work ----------------------------------------------------------
 
     async def _do_scan(self, timeout: float) -> list[Discovered]:
+        log.debug("scan starting")
         self.state = SCANNING
         self.error = ""
         self.found = []
@@ -218,6 +222,10 @@ class CarBackend:
                 try:
                     fut.set_result(await factory())
                 except BaseException as exc:  # noqa: BLE001
+                    # warning level: this is the only trace a swallowed
+                    # action leaves, and it is how on-device failures were
+                    # first seen (logcat carries python warnings)
+                    log.warning("action failed: %r", exc)
                     self.error = str(exc) or exc.__class__.__name__
                     self.state = ERROR if self._car is None else CONNECTED
                     if not fut.done():

@@ -134,32 +134,32 @@ class GamepadSession:
         st = self.state
         with st._lock:
             if ev.type == ecodes.EV_ABS:
-                kind = AXES.get(_abs_name(ev.code), "")
-                if kind == "fwd":
+                kinds = {AXES[n] for n in _code_names(ecodes.ABS, ev.code) if n in AXES}
+                if "fwd" in kinds:
                     st.fwd = -self._norm(ev.code, ev.value)  # stick up = forward
-                elif kind == "steer":
+                elif "steer" in kinds:
                     st.steer = self._norm(ev.code, ev.value)
             elif ev.type == ecodes.EV_KEY:
                 down = bool(ev.value)
-                name = _btn_name(ev.code)
-                if name == "BTN_DPAD_UP":
+                names = _code_names(ecodes.BTN, ev.code)
+                if "BTN_DPAD_UP" in names:
                     st.fwd = 1.0 if down else 0.0
-                elif name == "BTN_DPAD_DOWN":
+                elif "BTN_DPAD_DOWN" in names:
                     st.fwd = -1.0 if down else 0.0
-                elif name == "BTN_DPAD_LEFT":
+                elif "BTN_DPAD_LEFT" in names:
                     st.steer = -1.0 if down else 0.0
-                elif name == "BTN_DPAD_RIGHT":
+                elif "BTN_DPAD_RIGHT" in names:
                     st.steer = 1.0 if down else 0.0
-                elif name in ("BTN_A", "BTN_TR", "BTN_TL2", "BTN_TR2"):
+                elif names & {"BTN_A", "BTN_TR", "BTN_TL2", "BTN_TR2"}:
                     st.turbo = down
                     if down:
                         st.speed = SPEED_TURBO
-                elif name == "BTN_X" and down:
+                elif "BTN_X" in names and down:
                     st.lights = not st.lights
-                elif name == "BTN_B" and down:
+                elif "BTN_B" in names and down:
                     st.fwd = 0.0
                     st.steer = 0.0
-                elif name in ("BTN_START", "BTN_MODE") and down:
+                elif names & {"BTN_START", "BTN_MODE"} and down:
                     st.quit = True
 
 
@@ -171,15 +171,19 @@ def _quiet():
         pass
 
 
-def _abs_name(code: int) -> str:
-    try:
-        return ecodes.ABS_by(code)
-    except KeyError:
-        return ""
+def _code_names(mapping: dict, code: int) -> frozenset[str]:
+    """Every evdev name for a numeric event code, aliases included.
 
-
-def _btn_name(code: int) -> str:
+    evdev maps a code to a single name *or a tuple of aliases* (``BTN_A`` is
+    also ``BTN_GAMEPAD``/``BTN_SOUTH``, and the table's first name for a code
+    is not always the one a mapping expects - 0x134 is ``BTN_WEST`` first,
+    ``BTN_Y`` second).  Callers must therefore match against the whole set;
+    comparing one canonical name silently drops half the controllers.
+    """
     try:
-        return ecodes.BTN_by(code)
-    except KeyError:
-        return ""
+        names = mapping[code]
+    except (KeyError, TypeError):
+        return frozenset()
+    if isinstance(names, str):
+        return frozenset((names,))
+    return frozenset(names)

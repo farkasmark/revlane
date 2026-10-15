@@ -33,9 +33,7 @@ AUX_CHAR_UUIDS = (
     "d44bc439-abfd-45a2-b575-92541612960b",
 )
 
-NAME_PREFIX = "QCAR"
-# 0x5452 == "TR" (Brandbase) - the value advertises the first two MAC bytes.
-MANUFACTURER_IDS = (0x5452, 0x5254)
+# advertising identity lives in radio.py (NAME_PREFIX, MANUFACTURER_IDS)
 
 STOP = Command()
 

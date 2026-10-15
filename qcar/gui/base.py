@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pygame
 
+from . import theme as T
+
 
 class Scene:
     def __init__(self, app) -> None:
@@ -56,7 +58,8 @@ class Scene:
 
     # output
     def draw(self, surf, th) -> None:
-        surf.fill(th.BG)
+        # colours are module constants (T.BG), not Theme attributes
+        surf.fill(T.BG)
 
 
 def rect_grid(area: pygame.Rect, cols: int, rows: int, gap: int = 0):

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 import re
 import time
@@ -20,6 +21,8 @@ import uuid
 from pathlib import Path
 
 from . import CONFIG_DIR
+
+log = logging.getLogger("qcar.profiles")
 
 ACCENTS = ("#ffb300", "#e53935", "#1e88e5", "#43a047", "#8e24aa", "#00acc1", "#f4511e", "#c0ca33")
 
@@ -131,14 +134,41 @@ class Garage:
             return g
         try:
             raw = json.loads(g.path.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            g._quarantine_unreadable()
             return g
-        for item in raw.get("cars", []):
+        if not isinstance(raw, dict) or not isinstance(raw.get("cars", []), list):
+            # valid JSON, wrong shape (e.g. a bare list): same hazard as a
+            # parse error - the next save() would replace it wholesale
+            g._quarantine_unreadable()
+            return g
+        for item in raw["cars"]:
+            if not isinstance(item, dict):
+                continue
             try:
                 g.profiles.append(Profile.from_dict(item))
             except TypeError:
                 continue
         return g
+
+    def _quarantine_unreadable(self) -> None:
+        """Copy an unreadable store aside so a later save() cannot destroy it.
+
+        Loading never writes, and ``dirty`` starts False - but the first
+        profile change *is* saved, and that would silently replace the
+        original file. Keeping a timestamped copy turns silent data loss
+        into a recoverable state.
+        """
+        try:
+            backup = self.path.parent / f"{self.path.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+            backup.write_bytes(self.path.read_bytes())
+        except OSError:
+            return
+        log.warning(
+            "profiles file %s is unreadable - kept a copy at %s",
+            self.path,
+            backup,
+        )
 
     def save(self) -> Path:
         self.path.parent.mkdir(parents=True, exist_ok=True)

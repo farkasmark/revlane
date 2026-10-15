@@ -34,6 +34,7 @@ class FakeBackend:
         self.telemetry = None
         self.tx = 0
         self.errors = 0
+        self.error = ""
         self.fps_tx = 22.0
         self.intents: list[Command] = []
         self._intent = Command()

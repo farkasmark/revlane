@@ -10,7 +10,6 @@ import sys
 import time
 from pathlib import Path
 
-from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 
 from . import APP_NAME, __version__
@@ -25,6 +24,7 @@ from .protocol import (
     decode_command_frame,
     parse_telemetry,
 )
+from .radio import Discovered
 
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 
@@ -39,7 +39,7 @@ async def resolve(args) -> str:
     if getattr(args, "address", None):
         return args.address
     print("scanning for QCAR cars ...")
-    cars: list[BLEDevice] = await find(timeout=args.scan_timeout)
+    cars: list[Discovered] = await find(timeout=args.scan_timeout)
     if not cars:
         sys.exit("no QCAR car found - is it switched on and in range?")
     for d in cars:
