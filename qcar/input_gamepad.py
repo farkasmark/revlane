@@ -124,11 +124,29 @@ class GamepadSession:
             try:
                 events = select.select([self.dev.fd], [], [], 0.05)[0]
             except OSError:
+                self._reader_gone("device disappeared")
                 return
             if not events:
                 continue
-            for ev in self.dev.read():
+            try:
+                read = self.dev.read()
+            except Exception as exc:  # evdev raises OSError & co on removal
+                self._reader_gone(str(exc) or exc.__class__.__name__)
+                return
+            for ev in read:
                 self._on_event(ev)
+
+    def _reader_gone(self, reason: str) -> None:
+        """The pad is gone (unplugged, reader error): release every control
+        and stop the command loop.  Returning without this leaves the car
+        driving on the last command indefinitely."""
+        st = self.state
+        with st._lock:
+            st.fwd = 0.0
+            st.steer = 0.0
+            st.turbo = False
+            st.quit = True
+            st.status = f"gamepad lost: {reason}"
 
     def _on_event(self, ev) -> None:
         st = self.state
@@ -151,9 +169,9 @@ class GamepadSession:
                 elif "BTN_DPAD_RIGHT" in names:
                     st.steer = 1.0 if down else 0.0
                 elif names & {"BTN_A", "BTN_TR", "BTN_TL2", "BTN_TR2"}:
+                    # command() sends SPEED_TURBO while turbo is held, so
+                    # st.speed keeps the driver's pace and reappears on release
                     st.turbo = down
-                    if down:
-                        st.speed = SPEED_TURBO
                 elif "BTN_X" in names and down:
                     st.lights = not st.lights
                 elif "BTN_B" in names and down:

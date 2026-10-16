@@ -137,12 +137,14 @@ class Garage:
         except (json.JSONDecodeError, UnicodeDecodeError, OSError):
             g._quarantine_unreadable()
             return g
-        if not isinstance(raw, dict) or not isinstance(raw.get("cars", []), list):
-            # valid JSON, wrong shape (e.g. a bare list): same hazard as a
-            # parse error - the next save() would replace it wholesale
+        cars = raw.get("cars", []) if isinstance(raw, dict) else None
+        if not isinstance(cars, list):
+            # valid JSON, wrong shape (a bare list, or "cars" not a list):
+            # same hazard as a parse error - the next save() would replace
+            # it wholesale.  A missing key takes the validated default.
             g._quarantine_unreadable()
             return g
-        for item in raw["cars"]:
+        for item in cars:
             if not isinstance(item, dict):
                 continue
             try:

@@ -15,7 +15,6 @@ from qcar.protocol import Command, parse_telemetry
 from qcar.radio import Discovered, looks_like_qcar, make_radio
 from qcar.radio_mock import MOCK_ADDRESS, MockRadio
 
-
 # ---------------------------------------------------------------- factory
 
 

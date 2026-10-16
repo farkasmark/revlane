@@ -184,6 +184,7 @@ def prime() -> None:
 STATE_DISCONNECTED = 0
 STATE_CONNECTED = 2
 TRANSPORT_LE = 2
+WRITE_TIMEOUT = 10.0
 
 #: Fully qualified names of every Java class the radio resolves at runtime.
 #: The bridge classes live in android-src/ (compiled into the APK by gradle);
@@ -515,6 +516,14 @@ class AndroidRadio(Radio):
         except asyncio.TimeoutError:
             await self.disconnect()
             raise ConnectionError(f"{address} did not answer the link request") from None
+        except BaseException:
+            # a status failure, a service-discovery failure or cancellation:
+            # the attempt did not succeed, so it must release its handle and
+            # retire its session exactly like a timeout - otherwise failed
+            # attempts accumulate open GATT connections and live generations,
+            # and a late callback can resolve a later attempt's future
+            await self.disconnect()
+            raise
         log.info("android: connected to %s", address)
 
     @property
@@ -645,4 +654,15 @@ class AndroidRadio(Radio):
             if not self._gatt.writeCharacteristic(ch):
                 self._write_fut = None
                 raise ConnectionError("GATT write rejected (operation in flight?)")
-            await asyncio.wait_for(self._write_fut, 10)
+            try:
+                await asyncio.wait_for(self._write_fut, WRITE_TIMEOUT)
+            except asyncio.TimeoutError:
+                # the ACK may still arrive after we give up, and ACKs carry
+                # no operation id: this frame's outcome is unknowable, so
+                # the connection cannot be reused - a late ACK would resolve
+                # the NEXT write's future.  Retire the link; the reconnect
+                # logic builds a fresh one.
+                await self.disconnect()
+                raise ConnectionError(
+                    f"write to {char_uuid} timed out - connection retired"
+                ) from None

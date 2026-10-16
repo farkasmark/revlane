@@ -255,9 +255,10 @@ class DriveScene(Scene):
         self.app.toasts.push("stopped", T.WARN)
 
     def set_turbo(self, value: bool) -> None:
+        # self.speed keeps the driver's chosen pace: command() sends
+        # SPEED_TURBO while turbo is engaged, so disengaging restores it
+        # instead of leaving full throttle latched
         self.turbo = value
-        if value:
-            self.speed = SPEED_TURBO
 
     def set_lights(self, value: bool) -> None:
         self.lights = value

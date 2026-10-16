@@ -594,3 +594,17 @@ def test_toasts_clear_the_editor_buttons_while_editing(make_app):
     in_row = [r for r, _img, _under in _capture_text_blits(app)
               if r.colliderect(row)]
     assert len(in_row) == 2, f"only SAVE/CANCEL belong in the row, found {in_row}"
+
+
+def test_disabling_turbo_restores_the_selected_speed(make_app):
+    app, _prof = _drive(make_app, speed_cap=100)
+    pump(app, 1)
+    scene = app.scene
+    click(scene.slider.rect.center)  # track centre = 60
+    pump(app, 2)
+    click(scene.turbo_t.rect.center)  # turbo on
+    pump(app, 2)
+    assert app.backend.intent().speed == SPEED_TURBO
+    click(scene.turbo_t.rect.center)  # turbo off again
+    pump(app, 2)
+    assert app.backend.intent().speed == 60, "turbo off left full throttle"

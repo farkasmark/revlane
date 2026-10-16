@@ -430,3 +430,184 @@ def test_python_descriptors_match_the_java_interface():
             assert sig.startswith("([B"), sig
         else:
             assert sig.startswith("(J"), sig
+
+
+# ------------------------------------------ failed attempts release everything
+# Regression for the review finding: an attempt failing on a GATT status
+# (not a timeout) used to leak its handle and session - two failed attempts
+# left two registered sessions, zero closed handles, and a late callback
+# could resolve a later attempt's future.  Same class of hazard for a write
+# timeout: ACKs carry no operation id, so the connection cannot be reused.
+
+
+class _FakeChar:
+    def __init__(self):
+        self.write_type = None
+        self.value = None
+
+    def setWriteType(self, t):
+        self.write_type = t
+
+    def setValue(self, v):
+        self.value = bytes(v)
+
+
+class _FakeService:
+    def __init__(self):
+        self.chars = {}
+
+    def getCharacteristic(self, uuid):
+        return self.chars.setdefault(uuid, _FakeChar())
+
+
+class _FakeGatt:
+    """Accepted, but never acknowledged - the timeout path."""
+
+    def __init__(self):
+        self.disconnect_calls = 0
+        self.close_calls = 0
+        self.service = _FakeService()
+
+    def disconnect(self):
+        self.disconnect_calls += 1
+
+    def close(self):
+        self.close_calls += 1
+
+    def discoverServices(self):
+        pass
+
+    def getService(self, uuid):
+        return self.service
+
+    def writeCharacteristic(self, ch):
+        return True
+
+
+class _FakeDevice:
+    def __init__(self, adapter):
+        self.adapter = adapter
+
+    def connectGatt(self, activity, autoconnect, cb, transport):
+        gatt = _FakeGatt()
+        self.adapter.gatts.append(gatt)
+        return gatt
+
+
+class _FakeAdapter:
+    def __init__(self):
+        self.gatts = []
+
+    def getRemoteDevice(self, address):
+        return _FakeDevice(self)
+
+
+class _FakeGattCharacteristic:
+    WRITE_TYPE_DEFAULT = 2
+    WRITE_TYPE_NO_RESPONSE = 1
+
+
+def _radio_under_test(monkeypatch):
+    import types as _types
+
+    from qcar import radio_android as ra
+
+    radio = AndroidRadio()
+    router = _CallbackRouter()
+    adapter = _FakeAdapter()
+    fake_shared = {"router": router, "listener": object()}
+    fake_classes = {
+        "PyGattCallback": lambda listener, gen: _types.SimpleNamespace(generation=gen),
+        "GattCharacteristic": _FakeGattCharacteristic,
+    }
+    monkeypatch.setattr(ra, "_shared", fake_shared)
+    monkeypatch.setattr(ra, "_shared_cbs", lambda: fake_shared)
+    monkeypatch.setattr(ra, "_classes", lambda: fake_classes)
+    monkeypatch.setattr(radio, "_bt_adapter", lambda: adapter)
+    monkeypatch.setattr(radio, "_activity", lambda: object())
+    monkeypatch.setattr(radio, "_uuid", lambda s: object())
+    return radio, router, adapter
+
+
+def _start(radio, address="AA:BB:CC:DD:EE:FF"):
+    radio._loop = asyncio.get_running_loop()  # connect() normally does this
+    return asyncio.create_task(radio._connect_once(address, 5.0))
+
+
+async def _connect_ok(radio, address="AA:BB:CC:DD:EE:FF"):
+    from qcar.radio_android import STATE_CONNECTED
+
+    task = _start(radio, address)
+    await asyncio.sleep(0.05)
+    radio._cb_conn_state(address, 0, STATE_CONNECTED)
+    radio._cb_services(address, 0)
+    await task
+
+
+async def test_failed_status_attempt_closes_handle_and_retires_session(monkeypatch):
+    from qcar.radio_android import STATE_DISCONNECTED
+
+    radio, router, adapter = _radio_under_test(monkeypatch)
+    task = _start(radio)
+    await asyncio.sleep(0.05)
+    assert router._sessions, "the attempt owns a live session while connecting"
+    assert adapter.gatts and adapter.gatts[0].close_calls == 0
+
+    radio._cb_conn_state("AA:BB:CC:DD:EE:FF", 8, STATE_DISCONNECTED)
+    with pytest.raises(ConnectionError):
+        await task
+
+    assert adapter.gatts[0].disconnect_calls >= 1, "handle must be released"
+    assert adapter.gatts[0].close_calls == 1
+    assert router._sessions == {}, "failed attempt must retire its generation"
+    assert radio.connected is False
+
+
+async def test_two_failed_attempts_leave_no_handles_or_sessions(monkeypatch):
+    from qcar.radio_android import STATE_DISCONNECTED
+
+    radio, router, adapter = _radio_under_test(monkeypatch)
+    for _ in range(2):
+        task = _start(radio)
+        await asyncio.sleep(0.05)
+        radio._cb_conn_state("AA:BB:CC:DD:EE:FF", 8, STATE_DISCONNECTED)
+        with pytest.raises(ConnectionError):
+            await task
+    assert len(adapter.gatts) == 2
+    assert [g.close_calls for g in adapter.gatts] == [1, 1]
+    assert router._sessions == {}
+
+
+async def test_cancellation_releases_the_handle_and_session(monkeypatch):
+    radio, router, adapter = _radio_under_test(monkeypatch)
+    task = _start(radio)
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert [g.close_calls for g in adapter.gatts] == [1]
+    assert router._sessions == {}
+
+
+async def test_write_timeout_retires_the_connection(monkeypatch):
+    from qcar import radio_android as ra
+    from qcar.radio import SERVICE_UUID
+
+    radio, router, adapter = _radio_under_test(monkeypatch)
+    await _connect_ok(radio)
+    assert radio.connected
+
+    monkeypatch.setattr(ra, "WRITE_TIMEOUT", 0.05)
+    with pytest.raises(ConnectionError, match="retired"):
+        await radio.write(SERVICE_UUID, b"\x01")
+
+    gatt = adapter.gatts[0]
+    assert gatt.close_calls == 1 and gatt.disconnect_calls >= 1
+    assert router._sessions == {}
+    assert radio.connected is False
+
+    # the late ACK for the retired write is dropped...
+    radio._cb_write("AA:BB:CC:DD:EE:FF", SERVICE_UUID, 0)
+    # ...and the next write fails loudly instead of being falsely acknowledged
+    with pytest.raises(ConnectionError):
+        await radio.write(SERVICE_UUID, b"\x02")

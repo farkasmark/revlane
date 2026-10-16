@@ -74,3 +74,13 @@ def test_later_save_leaves_the_backup_intact(tmp_path):
     assert len(backups) == 1
     assert backups[0].read_text() == "garbage"
     assert json.loads(p.read_text())["cars"][0]["name"] == "Fresh"
+
+
+def test_empty_object_loads_as_an_empty_garage(tmp_path):
+    """{} has no 'cars' key: load must take the validated default instead of
+    raising KeyError (regression: raw.get() validated, raw['cars'] indexed)."""
+    p = tmp_path / "profiles.json"
+    p.write_text("{}")
+    g = Garage.load(p)
+    assert len(g) == 0
+    assert p.read_text() == "{}"  # an empty store holds nothing worth keeping
