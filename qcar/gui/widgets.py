@@ -17,6 +17,15 @@ import pygame
 from . import theme as T
 
 
+def fit_text(font, text: str, max_w: int) -> str:
+    """Elide with an ellipsis so the rendered text never exceeds max_w."""
+    if font.size(text)[0] <= max_w:
+        return text
+    while text and font.size(text + "\u2026")[0] > max_w:
+        text = text[:-1]
+    return text + "\u2026"
+
+
 def rounded(surf, rect, color, radius, border=0, border_color=None):
     if border:
         pygame.draw.rect(surf, border_color or T.LINE, rect, border, border_radius=radius)
@@ -262,11 +271,18 @@ class Toggle(Widget):
         rounded(surf, self.rect, col, th.radius)
         rounded(surf, self.rect, col, th.radius, border=max(1, int(2 * th.scale)),
                 border_color=border_col)
-        dot_r = int(min(self.rect.w, self.rect.h) * 0.16)
-        dot_x = self.rect.right - dot_r - int(10 * th.scale) if self.value else (
-            self.rect.left + dot_r + int(10 * th.scale))
-        pygame.draw.circle(surf, (18, 20, 26) if self.value else T.FAINT, (dot_x, self.rect.centery), dot_r)
         f = th.font.get(th.fs(20))
+        label_end = self.rect.left + int(14 * th.scale) + f.size(self.label)[0]
+        dot_r = int(min(self.rect.w, self.rect.h) * 0.16)
+        # the dot slides on the right side, but never left of the label text:
+        # the off-state used to land the dot ON the label
+        on_x = self.rect.right - dot_r - int(10 * th.scale)
+        off_x = max(label_end + dot_r + int(12 * th.scale),
+                    self.rect.right - 3 * dot_r - int(24 * th.scale))
+        dot_x = on_x if self.value else min(off_x, on_x - dot_r - int(4 * th.scale))
+        pygame.draw.circle(surf, (18, 20, 26) if self.value else T.FAINT, (dot_x, self.rect.centery), dot_r)
+        self._dot_rect = pygame.Rect(dot_x - dot_r, self.rect.centery - dot_r,
+                                     2 * dot_r, 2 * dot_r)
         img = f.render(self.label, True, label_col)
         surf.blit(img, img.get_rect(midleft=(self.rect.left + int(14 * th.scale), self.rect.centery)))
 
@@ -330,7 +346,7 @@ class Slider(Widget):
         kx = track.x + int(track.w * t)
         pygame.draw.circle(surf, T.TEXT, (kx, track.centery), int(14 * th.scale))
         f = th.font.get(th.fs(18))
-        img = f.render(f"{self.label} {self.value}%", True, T.DIM)
+        img = f.render(f"{self.label} {self.value}%".strip(), True, T.DIM)
         surf.blit(img, img.get_rect(midleft=(self.rect.x, self.rect.top - th.fs(12))))
 
 

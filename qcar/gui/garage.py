@@ -16,7 +16,7 @@ from ..profiles import ACCENTS, Profile
 from . import theme as T
 from .backend import Discovered
 from .base import Scene
-from .widgets import Button, Label, Slider, Toggle, rounded, wrap_text
+from .widgets import Button, Label, Slider, Toggle, fit_text, rounded, wrap_text
 
 
 @dataclasses.dataclass
@@ -63,8 +63,12 @@ class GarageScene(Scene):
         head = pygame.Rect(pad, pad, th.w - 2 * pad, th.fs(46))
         self.title = Label(head, "GARAGE", T.TEXT, 40)
         n = len(self.app.garage)
+        # the count sits BELOW the title's line, not inside the same fixed
+        # head rect: both rendered in one fs(46) block and the glyphs
+        # collided at phone font scales
         self.count = Label(
-            pygame.Rect(head.x, head.bottom - th.fs(22), head.w, th.fs(22)),
+            pygame.Rect(head.x, head.y + th.fs(46) + int(6 * th.scale),
+                        head.w, th.fs(22)),
             f"{n} car{'s' if n != 1 else ''} in the garage",
             T.DIM,
             20,
@@ -78,7 +82,8 @@ class GarageScene(Scene):
         self.widgets = [self.title, self.count, self.scan_btn]
 
         strip_h = int(84 * th.scale)
-        self.strip = pygame.Rect(pad, head.bottom + int(30 * th.scale), th.w - 2 * pad, strip_h)
+        self.strip = pygame.Rect(pad, self.count.rect.bottom + int(30 * th.scale),
+                                 th.w - 2 * pad, strip_h)
 
         top = self.strip.bottom + int(36 * th.scale)
         cols = 1 if th.w < 700 else (2 if th.w < 1180 else 3)
@@ -300,6 +305,7 @@ class GarageScene(Scene):
     def draw(self, surf, th: T.Theme) -> None:
         surf.fill(T.BG)
         _background_grid(surf, th)
+        self.toast_top = None
         for w in self.widgets:
             w.draw(surf, th)
         self._draw_nearby(surf, th)
@@ -341,24 +347,33 @@ class GarageScene(Scene):
             rounded(surf, cell, T.PANEL_2, int(10 * th.scale))
             pygame.draw.rect(surf, col, (cell.x, cell.y + int(8 * th.scale), int(4 * th.scale),
                                          cell.h - int(16 * th.scale)), border_radius=2)
-            nf = th.font.get(th.fs(19))
-            label = (prof.name if prof else d.label)[:20]
-            name_img = nf.render(label, True, T.TEXT)
-            # anchor the two lines AROUND the centre using their measured
-            # heights: fixed ±11px offsets ignored the rendered font sizes
-            # and the lines collided at phone font scales
-            name_r = name_img.get_rect(
-                midbottom=(cell.x + int(14 * th.scale), cell.centery - int(3 * th.scale)))
-            surf.blit(name_img, name_r)
-            sf = th.font.get(th.fs(15))
-            meta = f"{d.address}   {d.rssi} dBm"
-            meta_img = sf.render(meta, True, T.DIM)
-            meta_r = meta_img.get_rect(
-                midtop=(cell.x + int(14 * th.scale), cell.centery + int(3 * th.scale)))
-            surf.blit(meta_img, meta_r)
-            self.nearby_text_rects.append((name_r, meta_r))
             btn = pygame.Rect(cell.right - int(64 * th.scale), cell.centery - int(15 * th.scale),
                               int(56 * th.scale), int(30 * th.scale))
+            nf = th.font.get(th.fs(19))
+            label = (prof.name if prof else d.label)[:20]
+            # left-anchored lines stacked around the cell centre, elided
+            # before the EDIT/ADD button: midbottom/midtop centred the text
+            # on the anchor (half of it off the cell) and fixed offsets
+            # ignored the rendered font sizes
+            tx = cell.x + int(14 * th.scale)
+            max_w = btn.x - int(12 * th.scale) - tx
+            name_img = nf.render(fit_text(nf, label, max_w), True, T.TEXT)
+            sf = th.font.get(th.fs(15))
+            meta = f"{d.address}   {d.rssi} dBm"
+            meta_img = sf.render(fit_text(sf, meta, max_w), True, T.DIM)
+            # stack the two lines by their measured heights around the cell
+            # centre: a fixed gap collides once the fonts render tall
+            gap = int(6 * th.scale)
+            block = name_img.get_height() + gap + meta_img.get_height()
+            top = cell.centery - block // 2
+            name_r = name_img.get_rect(
+                midleft=(tx, top + name_img.get_height() // 2))
+            surf.blit(name_img, name_r)
+            meta_r = meta_img.get_rect(
+                midleft=(tx, top + name_img.get_height() + gap
+                         + meta_img.get_height() // 2))
+            surf.blit(meta_img, meta_r)
+            self.nearby_text_rects.append((name_r, meta_r))
             Button(btn, "EDIT" if prof else "ADD", None, kind="ghost", size=17).draw(surf, th)
             self.nearby.append((btn, d))
             x += w + int(10 * th.scale)
@@ -386,13 +401,17 @@ class GarageScene(Scene):
         pygame.draw.rect(surf, accent, (r.x, r.y + th.radius, int(5 * th.scale),
                                         r.h - 2 * th.radius))
         nf = th.font.get(th.fs(25))
-        name_img = nf.render(prof.name[:26], True, T.TEXT)
         sf = th.font.get(th.fs(15))
-        meta = f"{prof.address}   seen {prof.last_seen_text}   {prof.odometer}"
-        meta_img = sf.render(meta, True, T.DIM)
         # stack by measured heights: the fixed offsets (26/48/70) ignored the
-        # rendered text sizes and the lines collided at phone font scales
+        # rendered text sizes and the lines collided at phone font scales.
+        # name elides before the battery chip, meta before the card edge
         x = r.x + int(18 * th.scale)
+        chip_x = r.right - int(84 * th.scale)
+        name_img = nf.render(
+            fit_text(nf, prof.name[:26], chip_x - x - int(12 * th.scale)), True, T.TEXT)
+        meta = f"{prof.address}   seen {prof.last_seen_text}   {prof.odometer}"
+        meta_img = sf.render(
+            fit_text(sf, meta, r.right - int(18 * th.scale) - x), True, T.DIM)
         y = r.y + int(8 * th.scale)
         surf.blit(name_img, name_img.get_rect(
             midleft=(x, y + name_img.get_height() // 2)))
@@ -444,8 +463,10 @@ class GarageScene(Scene):
             rects[key] = pygame.Rect(r.x, y + th.fs(19), r.w, h)
             y += h + th.fs(30)
         rects["cap_label"] = pygame.Rect(r.x, y, r.w, th.fs(15))
-        rects["cap"] = pygame.Rect(r.x, y + th.fs(20), r.w, int(44 * th.scale))
-        y += int(44 * th.scale) + th.fs(30)
+        # the slider renders its value above its own rect: leave that line
+        # free, or "80%" lands on the SPEED CAP label
+        rects["cap"] = pygame.Rect(r.x, y + th.fs(34), r.w, int(44 * th.scale))
+        y += int(44 * th.scale) + th.fs(46)
         rects["accents"] = pygame.Rect(r.x, y, r.w, int(38 * th.scale))
         y += int(38 * th.scale) + int(14 * th.scale)
         rects["toggles"] = pygame.Rect(r.x, y, r.w, h)
@@ -463,13 +484,18 @@ class GarageScene(Scene):
         veil.fill((0, 0, 0, 175))
         surf.blit(veil, (0, 0))
         box, R = self._editor_box(th)
+        # while the modal is open, toasts stack from the top: at the screen
+        # bottom they land on the SAVE/CANCEL row
+        self.toast_top = int(10 * th.scale)
         rounded(surf, box, T.PANEL, th.radius * 2, border=2, border_color=T.LINE)
         f = th.font.get(th.fs(27))
         title = "SAVE CAR" if d.is_new else "EDIT CAR"
         surf.blit(f.render(title, True, T.TEXT), R["title"].topleft)
         af = th.font.get(th.fs(16))
-        img = af.render(d.address, True, T.DIM)
-        surf.blit(img, img.get_rect(midright=(R["title"].right, R["title"].centery)))
+        img = af.render(fit_text(af, d.address, box.w // 2 - int(24 * th.scale)),
+                        True, T.DIM)
+        surf.blit(img, img.get_rect(midright=(box.right - int(24 * th.scale),
+                                              R["title"].centery)))
 
         blink = int(time.monotonic() * 2) % 2 == 0
         for key in ("name", "notes"):
