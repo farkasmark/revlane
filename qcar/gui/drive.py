@@ -219,7 +219,9 @@ class DriveScene(Scene):
             16,
         )
         self.hint.visible = self.hint.rect.h >= th.fs(60)
-        self.widgets = [self.back, self.name, self.turbo_t, self.lights_t, self.slider, self.stop]
+        # self.name is drawn explicitly in draw_topbar - it is not a widget
+        # here, and listing it drew the label twice
+        self.widgets = [self.back, self.turbo_t, self.lights_t, self.slider, self.stop]
 
     # ------------------------------------------------------------------
     # control
@@ -354,6 +356,8 @@ class DriveScene(Scene):
         bar = pygame.Rect(th.pad, th.h - th.pad - int(44 * th.scale), th.w - 2 * th.pad,
                           int(44 * th.scale))
         rounded(surf, bar, T.PANEL, int(10 * th.scale), border=1, border_color=T.LINE)
+        # toasts must stop above the telemetry bar, not on its text
+        self.toast_bottom = bar.top - int(6 * th.scale)
         cmd = self.command()
         dx, dy = self.pad.axes()
         parts = [

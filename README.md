@@ -165,6 +165,22 @@ If the window dies with an `X Error ... (GLX)` abort instead of a Python
 traceback, your X stack has no usable GL context (common under Xwayland) — add
 `--software`, which sets `SDL_RENDER_DRIVER` before SDL initialises.
 
+### Layout gate: the glyph-scan regression tests
+
+`tests/test_gui.py` contains **glyph-level layout gates** (`test_gate_*`): they
+render real frames offscreen, capture every text blit and assert no two
+glyph masks touch — across screen sizes and UI states (garage, editor modal
+with toasts, drive pad). Rect arithmetic is not enough: font boxes include
+padding the glyphs do not use, which is exactly how three overlapping-label
+bugs reached the phone.
+
+**If you revamp the UI, these tests are part of the definition of done:**
+
+- keep every scan green — a collision is a real overlap a user will see;
+- new screens, widgets or states must be added to the scanned states;
+- redesigned layouts must update the pinpoint assertions (card bounds, nearby
+  cell containment, header stack) alongside the geometry they assert.
+
 ## Web controller — drive it from your phone
 
 ```bash

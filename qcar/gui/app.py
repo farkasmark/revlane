@@ -38,12 +38,27 @@ class Toasts:
         self.items.append([msg, time.monotonic() + ttl, color or T.TEXT])
         del self.items[:-4]
 
-    def draw(self, surf, th: Theme) -> None:
+    def draw(self, surf, th: Theme, bottom: int | None = None,
+             top: int | None = None) -> None:
+        """Stack toasts upward from `bottom` (default: screen bottom), or
+        downward from `top` (modal scenes). Scenes raise these so toasts
+        never cover interactive UI - the drive telemetry bar, the garage
+        editor's SAVE/CANCEL row."""
         now = time.monotonic()
         self.items = [i for i in self.items if i[1] > now]
-        y = th.h - int(8 * th.scale)
+        f = th.font.get(th.fs(18))
+        if top is not None:
+            y = top
+            for msg, _until, color in self.items:
+                img = f.render(msg, True, color)
+                box = img.get_rect(midtop=(th.w // 2, y))
+                box.inflate_ip(int(28 * th.scale), int(14 * th.scale))
+                rounded(surf, box, T.PANEL, th.radius, border=1, border_color=T.LINE)
+                surf.blit(img, img.get_rect(center=box.center))
+                y = box.bottom + int(6 * th.scale)
+            return
+        y = (th.h if bottom is None else bottom) - int(8 * th.scale)
         for msg, _until, color in reversed(self.items):
-            f = th.font.get(th.fs(18))
             img = f.render(msg, True, color)
             box = img.get_rect(midbottom=(th.w // 2, y))
             box.inflate_ip(int(28 * th.scale), int(14 * th.scale))
@@ -204,7 +219,9 @@ class App:
         self.backend.tickle()
         self.scene.update(dt)
         self.scene.draw(self.screen, self.theme)
-        self.toasts.draw(self.screen, self.theme)
+        self.toasts.draw(self.screen, self.theme,
+                         bottom=getattr(self.scene, "toast_bottom", None),
+                         top=getattr(self.scene, "toast_top", None))
         pygame.display.flip()
         return True
 
