@@ -129,11 +129,14 @@ class GamepadSession:
             if not events:
                 continue
             try:
-                read = self.dev.read()
+                # evdev's read() is a lazy generator: the device read (and
+                # its errors) happen during ITERATION, so force it inside
+                # the handler - a bare for-loop let read errors escape
+                events_read = list(self.dev.read())
             except Exception as exc:  # evdev raises OSError & co on removal
                 self._reader_gone(str(exc) or exc.__class__.__name__)
                 return
-            for ev in read:
+            for ev in events_read:
                 self._on_event(ev)
 
     def _reader_gone(self, reason: str) -> None:

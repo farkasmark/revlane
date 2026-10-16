@@ -611,3 +611,28 @@ async def test_write_timeout_retires_the_connection(monkeypatch):
     # ...and the next write fails loudly instead of being falsely acknowledged
     with pytest.raises(ConnectionError):
         await radio.write(SERVICE_UUID, b"\x02")
+
+
+async def test_write_cancellation_retires_the_connection(monkeypatch):
+    """Cancelling an accepted write leaves its outcome as unknowable as a
+    timeout: the late ACK must not resolve the next write's future."""
+    from qcar.radio import SERVICE_UUID
+
+    radio, router, adapter = _radio_under_test(monkeypatch)
+    await _connect_ok(radio)
+    assert radio.connected
+
+    task = asyncio.create_task(radio.write(SERVICE_UUID, b"\x01"))
+    await asyncio.sleep(0.05)  # accepted by the stack, ACK never comes
+    assert adapter.gatts[0].close_calls == 0
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert adapter.gatts[0].close_calls == 1
+    assert router._sessions == {}
+    assert radio.connected is False
+
+    radio._cb_write("AA:BB:CC:DD:EE:FF", SERVICE_UUID, 0)  # late ACK: dropped
+    with pytest.raises(ConnectionError):
+        await radio.write(SERVICE_UUID, b"\x02")

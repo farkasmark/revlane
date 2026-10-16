@@ -10,7 +10,7 @@ from conftest import ADDR, FOUND, click, finger, key_ev, pump
 
 from qcar.gui.drive import DriveScene
 from qcar.gui.garage import GarageScene
-from qcar.protocol import SPEED_TURBO, Command, Telemetry
+from qcar.protocol import SPEED_NORMAL, SPEED_TURBO, Command, Telemetry
 
 # ------------------------------------------------------------------ garage
 
@@ -60,7 +60,9 @@ def test_editor_toggles_and_cap_persist(make_app):
     pump(app, 2)
     prof = app.garage.find(ADDR)
     assert prof.turbo_default is True and prof.lights_default is True
-    assert prof.speed_default == 100
+    # pace is independent of the turbo default: turbo maps to SPEED_TURBO
+    # in command(), so disabling it falls back to this, not a latched 100
+    assert prof.speed_default == SPEED_NORMAL
 
 
 def test_editor_accent_swatch(make_app):
@@ -608,3 +610,19 @@ def test_disabling_turbo_restores_the_selected_speed(make_app):
     click(scene.turbo_t.rect.center)  # turbo off again
     pump(app, 2)
     assert app.backend.intent().speed == 60, "turbo off left full throttle"
+
+
+def test_disabling_a_turbo_default_profile_restores_a_normal_speed(make_app):
+    """A turbo_default profile starts at full boost, but disabling it must
+    fall back to the driver's pace - speed_default used to initialise the
+    normal speed at 100, so switching turbo off kept full throttle."""
+    app, _prof = _drive(make_app, speed_cap=100, turbo_default=True)
+    pump(app, 1)
+    scene = app.scene
+    assert scene.turbo is True
+    assert app.backend.intent().speed == SPEED_TURBO
+
+    click(scene.turbo_t.rect.center)  # driver disables turbo
+    pump(app, 2)
+    assert scene.turbo is False
+    assert app.backend.intent().speed < SPEED_TURBO

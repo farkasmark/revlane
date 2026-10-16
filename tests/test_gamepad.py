@@ -116,7 +116,10 @@ def test_reader_death_clears_controls_and_quits():
     command loop - a bare return left forward=True latched forever."""
 
     def boom():
+        # like evdev's read(): the error surfaces during ITERATION, not on
+        # the call - the handler must force the generator inside its try
         raise OSError("device removed")
+        yield  # pragma: no cover - makes this a generator
 
     sess, fd = _session_with_fake_dev(boom)
     sess.state.fwd = 1.0

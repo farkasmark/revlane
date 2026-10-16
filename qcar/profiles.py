@@ -21,6 +21,7 @@ import uuid
 from pathlib import Path
 
 from . import CONFIG_DIR
+from .protocol import SPEED_NORMAL
 
 log = logging.getLogger("qcar.profiles")
 
@@ -76,7 +77,10 @@ class Profile:
 
     @property
     def speed_default(self) -> int:
-        return 100 if self.turbo_default else min(80, self.speed_cap)
+        # the driver's pace, independent of the turbo default: turbo maps
+        # to SPEED_TURBO in command() while engaged, so disabling it must
+        # fall back to a normal speed, not to a latched 100
+        return min(SPEED_NORMAL, self.speed_cap)
 
     def touch_seen(self, battery: int | None = None) -> None:
         self.last_seen = time.time()

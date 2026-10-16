@@ -666,3 +666,8 @@ class AndroidRadio(Radio):
                 raise ConnectionError(
                     f"write to {char_uuid} timed out - connection retired"
                 ) from None
+            except BaseException:
+                # cancellation leaves the write's outcome just as unknowable
+                # as a timeout: retire the link, then propagate
+                await self.disconnect()
+                raise
