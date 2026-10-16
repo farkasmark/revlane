@@ -145,9 +145,15 @@ class Button(Widget):
         if self.sub:
             sf = th.font.get(th.fs(self.size - 8))
             simg = sf.render(self.sub, True, T.mix(fg, (0, 0, 0), 0.35))
-            surf.blit(img, img.get_rect(midbottom=(self.rect.centerx, self.rect.centery)))
+            # center the label+sub BLOCK as a unit: anchoring the pair on
+            # centery pushed it visually off-center
+            gap = int(2 * th.scale)
+            total = img.get_height() + gap + simg.get_height()
+            y0 = self.rect.centery - total // 2
+            surf.blit(img, img.get_rect(midtop=(self.rect.centerx, y0)))
             surf.blit(
-                simg, simg.get_rect(midtop=(self.rect.centerx, self.rect.centery + int(2 * th.scale)))
+                simg,
+                simg.get_rect(midtop=(self.rect.centerx, y0 + img.get_height() + gap)),
             )
         else:
             surf.blit(img, img.get_rect(center=self.rect.center))
@@ -244,16 +250,24 @@ class Toggle(Widget):
     def draw(self, surf, th):
         if not self.visible:
             return
-        col = self.accent if self.value else T.IDLE_BTN
+        if self.enabled:
+            col = self.accent if self.value else T.IDLE_BTN
+            label_col = (18, 20, 26) if self.value else T.TEXT
+            border_col = self.accent if self.value else T.LINE
+        else:
+            # disabled: dimmed, no accent - the user must see it is inert
+            col = T.IDLE_BTN
+            label_col = T.FAINT
+            border_col = T.LINE
         rounded(surf, self.rect, col, th.radius)
         rounded(surf, self.rect, col, th.radius, border=max(1, int(2 * th.scale)),
-                border_color=self.accent if self.value else T.LINE)
+                border_color=border_col)
         dot_r = int(min(self.rect.w, self.rect.h) * 0.16)
         dot_x = self.rect.right - dot_r - int(10 * th.scale) if self.value else (
             self.rect.left + dot_r + int(10 * th.scale))
         pygame.draw.circle(surf, (18, 20, 26) if self.value else T.FAINT, (dot_x, self.rect.centery), dot_r)
         f = th.font.get(th.fs(20))
-        img = f.render(self.label, True, (18, 20, 26) if self.value else T.TEXT)
+        img = f.render(self.label, True, label_col)
         surf.blit(img, img.get_rect(midleft=(self.rect.left + int(14 * th.scale), self.rect.centery)))
 
 

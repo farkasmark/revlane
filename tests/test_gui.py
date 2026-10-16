@@ -9,7 +9,7 @@ from conftest import ADDR, FOUND, click, finger, key_ev, pump
 
 from qcar.gui.drive import DriveScene
 from qcar.gui.garage import GarageScene
-from qcar.protocol import Command, Telemetry
+from qcar.protocol import SPEED_TURBO, Command, Telemetry
 
 # ------------------------------------------------------------------ garage
 
@@ -150,6 +150,47 @@ def test_connect_happens_on_drive(make_app):
     app, _prof = _drive(make_app)
     assert app.backend.connects == [ADDR]
     assert isinstance(app.scene, DriveScene)
+
+
+def test_battery_gauge_stays_inside_the_topbar_frame(make_app):
+    """Regression: the gauge sat flush on the topbar's right edge while the
+    battery nub is drawn PAST the gauge's right edge - the nub landed on the
+    frame's border line."""
+    app, _prof = _drive(make_app)
+    scene = app.scene
+    th = app.theme
+    nub_w = max(3, int(4 * th.scale))
+    assert scene.gauge.rect.right + nub_w < scene.topbar.right, (
+        "battery nub must clear the topbar frame border"
+    )
+
+
+def test_button_label_and_sub_are_centered_as_a_block(make_app):
+    """The label+sub pair must be vertically centered as one block, not
+    anchored on centery (which pushed the pair off-center)."""
+    from qcar.gui.widgets import Button
+
+    app = make_app()
+    pump(app, 1)
+    th = app.theme
+    # the widget draws at its absolute rect: put it at the surface origin
+    btn = Button(pygame.Rect(0, 0, 200, 120), "DRIVE", sub="hold", kind="primary")
+    surf = pygame.Surface(btn.rect.size)
+    surf.fill(btn.accent)  # base color: only the text pixels will differ
+    btn.draw(surf, th)
+
+    # bounding box of the text pixels inside the button
+    xs, ys = [], []
+    for y in range(btn.rect.h):
+        for x in range(btn.rect.w):
+            if surf.get_at((x, y)) != btn.accent:
+                xs.append(x)
+                ys.append(y)
+    assert xs, "no text rendered"
+    block_center = (min(ys) + max(ys)) / 2
+    assert abs(block_center - btn.rect.h / 2) <= 2.0, (
+        f"text block center {block_center} != button center {btn.rect.h / 2}"
+    )
 
 
 def test_finger_hold_to_drive(make_app):
@@ -301,3 +342,77 @@ def test_base_scene_draw_fills_with_theme_bg():
     surf.fill((255, 0, 255))
     Scene(object()).draw(surf, T.Theme(40, 30))
     assert surf.get_at((0, 0))[:3] == T.BG
+
+
+# ----------------------------------------------------------------- drive controls
+# Mocked-backend regression tests for the drive screen's right-hand controls:
+# taps are simulated through the real event path (SDL offscreen), and the
+# recorded intents are asserted - the exact failures reported on hardware.
+
+
+def test_speed_slider_sets_intent_speed(make_app):
+    app, _prof = _drive(make_app, speed_cap=100)
+    pump(app, 1)
+    scene = app.scene
+    click(scene.slider.rect.center)  # track centre = (20+100)/2
+    pump(app, 2)
+    assert app.backend.intent().speed == 60
+
+
+def test_turbo_toggle_engages_turbo_speed(make_app):
+    app, _prof = _drive(make_app, speed_cap=100)
+    pump(app, 1)
+    scene = app.scene
+    click(scene.turbo_t.rect.center)
+    pump(app, 2)
+    assert app.backend.intent().speed == SPEED_TURBO
+
+
+def test_profile_cap_clamps_speed_and_disables_turbo(make_app):
+    """The cap is a safety feature, so the controls must be honest about it:
+    the slider tops out at the cap and TURBO renders disabled - instead of
+    silently clamping while the controls pretend to work."""
+    app, prof = _drive(make_app)  # default cap: 80
+    pump(app, 1)
+    scene = app.scene
+    assert scene.turbo_t.enabled is False
+    assert app.backend.intent().speed <= prof.speed_cap
+
+    click((scene.slider.rect.right - 2, scene.slider.rect.centery))
+    pump(app, 2)
+    assert app.backend.intent().speed == prof.speed_cap == 80
+
+    click(scene.turbo_t.rect.center)  # disabled: must be inert
+    pump(app, 2)
+    assert app.backend.intent().speed <= 80
+
+
+def test_stop_button_releases_a_held_pad(make_app):
+    app, _prof = _drive(make_app)
+    pump(app, 1)
+    scene = app.scene
+    th = app.theme
+    pad = scene.pad
+    finger(pad.center[0], pad.center[1] - int(pad.radius * 0.8),
+           pygame.FINGERDOWN, w=th.w, h=th.h)
+    pump(app, 2)
+    assert app.backend.intent().forward is True  # driving
+
+    click(scene.stop.rect)  # second finger on STOP while the pad is held
+    pump(app, 2)
+    intent = app.backend.intent()
+    assert not intent.forward and not intent.backward, "STOP must clear the drive flags"
+    assert any("stop" in msg for msg, _until, _col in app.toasts.items), \
+        "STOP must give visible feedback"
+
+
+def test_garage_nearby_labels_do_not_overlap_at_phone_scale(make_app):
+    """Regression: the nearby cell anchored its two text lines at fixed
+    ±11px offsets while the fonts render ~2x taller at phone scale - the
+    lines collided. The draw pass now records the rects; assert separation."""
+    app = make_app(size=(1920, 1080), found=FOUND)
+    pump(app, 3)
+    scene = app.scene
+    assert scene.nearby_text_rects, "nearby cars should have rendered"
+    for name_r, meta_r in scene.nearby_text_rects:
+        assert name_r.bottom <= meta_r.top, "name and meta lines overlap"

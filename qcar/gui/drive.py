@@ -162,7 +162,10 @@ class DriveScene(Scene):
         self.name = Label(pygame.Rect(self.back.rect.right + int(14 * th.scale), self.topbar.y,
                                       int(260 * th.scale), bar_h), self.profile.name, T.TEXT, 24)
         self.gauge = BatteryGauge(pygame.Rect(0, 0, int(96 * th.scale), int(30 * th.scale)))
-        self.gauge.rect.midright = (self.topbar.right, self.topbar.centery)
+        # inset from the frame: the gauge draws a battery nub PAST its right
+        # edge, and flush placement put the nub on the topbar's border line
+        self.gauge.rect.midright = (self.topbar.right - int(12 * th.scale),
+                                    self.topbar.centery)
         self.sig = pygame.Rect(self.gauge.rect.x - int(44 * th.scale), 0, int(30 * th.scale),
                                int(26 * th.scale))
         self.sig.centery = self.topbar.centery
@@ -199,8 +202,15 @@ class DriveScene(Scene):
                                "LIGHTS", self.set_lights, value=self.lights)
         y = self.turbo_t.rect.bottom + int(28 * th.scale)
         slider_h = int(min(64 * th.scale, max(40 * th.scale, right.h * 0.2)))
+        # the profile cap always wins (safety), so make the controls HONEST
+        # about it: the slider tops at the cap and TURBO is disabled when the
+        # cap is below turbo speed - instead of silently clamping while the
+        # controls pretend to work
+        cap = self.profile.speed_cap
         self.slider = Slider(pygame.Rect(right.x, y, right.w, slider_h),
-                             20, 100, self.speed, self.set_speed, label="SPEED")
+                             20, min(100, cap), min(self.speed, min(100, cap)),
+                             self.set_speed, label="SPEED")
+        self.turbo_t.enabled = cap >= SPEED_TURBO
         self.hint = Label(
             pygame.Rect(right.x, self.slider.rect.bottom + int(14 * th.scale), right.w,
                         max(0, right.bottom - self.slider.rect.bottom - int(14 * th.scale))),
@@ -239,6 +249,8 @@ class DriveScene(Scene):
     def hard_stop(self) -> None:
         self.release_inputs()
         self.app.backend.set_intent(Command(speed=self.speed, lights=self.lights))
+        # feedback: a stop tap while coasting otherwise looks like a dead button
+        self.app.toasts.push("stopped", T.WARN)
 
     def set_turbo(self, value: bool) -> None:
         self.turbo = value
@@ -355,6 +367,8 @@ class DriveScene(Scene):
         ]
         if not b.gui_alive:
             parts.insert(0, "GUI STALLED -> STOPPED")
+        if b.state == "error" and b.error:
+            parts.insert(0, f"connect failed: {b.error}")
         x = bar.x + int(14 * th.scale)
         f = th.font.get(th.fs(17))
         for p in parts:

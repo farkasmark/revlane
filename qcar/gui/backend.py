@@ -176,9 +176,13 @@ class CarBackend:
         return out
 
     async def _do_connect(self, address: str) -> None:
+        # disconnect FIRST: it resets state to IDLE, and CONNECTING must be
+        # set after that or the UI shows "offline" for the whole connect
+        # (including the radio's retry window) - the "discoverable but
+        # displays offline" bug
+        await self._do_disconnect(quiet=True)
         self.state = CONNECTING
         self.error = ""
-        await self._do_disconnect(quiet=True)
         car = QCar(address, adapter=self.adapter)
         await car.connect()
         self._car = car

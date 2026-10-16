@@ -316,6 +316,7 @@ class GarageScene(Scene):
                             True, T.DIM), (r.x, r.y - int(24 * th.scale)))
         rounded(surf, r, T.PANEL, th.radius, border=1, border_color=T.LINE)
         self.nearby = []
+        self.nearby_text_rects = []
         if not found:
             # do not accuse the car of being off while we are still listening,
             # and never swallow a failed scan - state == ERROR used to be
@@ -342,14 +343,20 @@ class GarageScene(Scene):
                                          cell.h - int(16 * th.scale)), border_radius=2)
             nf = th.font.get(th.fs(19))
             label = (prof.name if prof else d.label)[:20]
-            img = nf.render(label, True, T.TEXT)
-            surf.blit(img, img.get_rect(
-                midleft=(cell.x + int(14 * th.scale), cell.centery - int(11 * th.scale))))
+            name_img = nf.render(label, True, T.TEXT)
+            # anchor the two lines AROUND the centre using their measured
+            # heights: fixed ±11px offsets ignored the rendered font sizes
+            # and the lines collided at phone font scales
+            name_r = name_img.get_rect(
+                midbottom=(cell.x + int(14 * th.scale), cell.centery - int(3 * th.scale)))
+            surf.blit(name_img, name_r)
             sf = th.font.get(th.fs(15))
             meta = f"{d.address}   {d.rssi} dBm"
-            img = sf.render(meta, True, T.DIM)
-            surf.blit(img, img.get_rect(
-                midleft=(cell.x + int(14 * th.scale), cell.centery + int(11 * th.scale))))
+            meta_img = sf.render(meta, True, T.DIM)
+            meta_r = meta_img.get_rect(
+                midtop=(cell.x + int(14 * th.scale), cell.centery + int(3 * th.scale)))
+            surf.blit(meta_img, meta_r)
+            self.nearby_text_rects.append((name_r, meta_r))
             btn = pygame.Rect(cell.right - int(64 * th.scale), cell.centery - int(15 * th.scale),
                               int(56 * th.scale), int(30 * th.scale))
             Button(btn, "EDIT" if prof else "ADD", None, kind="ghost", size=17).draw(surf, th)
@@ -379,14 +386,26 @@ class GarageScene(Scene):
         pygame.draw.rect(surf, accent, (r.x, r.y + th.radius, int(5 * th.scale),
                                         r.h - 2 * th.radius))
         nf = th.font.get(th.fs(25))
-        img = nf.render(prof.name[:26], True, T.TEXT)
-        surf.blit(img, img.get_rect(midleft=(r.x + int(18 * th.scale), r.y + int(26 * th.scale))))
+        name_img = nf.render(prof.name[:26], True, T.TEXT)
         sf = th.font.get(th.fs(15))
         meta = f"{prof.address}   seen {prof.last_seen_text}   {prof.odometer}"
-        surf.blit(sf.render(meta, True, T.DIM), (r.x + int(18 * th.scale), r.y + int(48 * th.scale)))
+        meta_img = sf.render(meta, True, T.DIM)
+        # stack by measured heights: the fixed offsets (26/48/70) ignored the
+        # rendered text sizes and the lines collided at phone font scales
+        x = r.x + int(18 * th.scale)
+        y = r.y + int(8 * th.scale)
+        surf.blit(name_img, name_img.get_rect(
+            midleft=(x, y + name_img.get_height() // 2)))
+        y += name_img.get_height() + int(2 * th.scale)
+        surf.blit(meta_img, meta_img.get_rect(
+            midleft=(x, y + meta_img.get_height() // 2)))
+        y += meta_img.get_height() + int(6 * th.scale)
         if prof.notes:
             note = " ".join(wrap_text(sf, prof.notes, r.w - int(40 * th.scale)))[:84]
-            surf.blit(sf.render(note, True, T.FAINT), (r.x + int(18 * th.scale), r.y + int(70 * th.scale)))
+            note_img = sf.render(note, True, T.FAINT)
+            # never run into the bottom button row
+            if y + note_img.get_height() <= r.bottom - int(58 * th.scale):
+                surf.blit(note_img, (x, y))
 
         chip = pygame.Rect(r.right - int(84 * th.scale), r.y + int(12 * th.scale),
                            int(72 * th.scale), int(26 * th.scale))
