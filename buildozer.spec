@@ -4,7 +4,7 @@ package.name = revlane
 package.domain = org.artalis
 source.dir = .
 source.include_exts = py,png,jpg,md,txt
-source.exclude_dirs = tests,tools,docs,.venv,.pytest_cache,.ruff_cache,build,.buildozer,revlane.egg-info
+source.exclude_dirs = tests,tools,docs,.venv,.pytest_cache,.ruff_cache,build,.buildozer,revlane.egg-info,assets
 
 # SDL2 garage + drive pad: pygame recipe pulls sdl2, sdl2_ttf, sdl2_image,
 # sdl2_mixer; cryptography pulls openssl + cffi (Rust build); pyjnius is the
@@ -40,6 +40,18 @@ android.archs = arm64-v8a
 
 android.accept_sdk_license = True
 android.allow_backup = False
+
+# revlane branding (original artwork, regenerate with
+#   .venv/bin/python assets/branding/make_artwork.py):
+# - icon.filename is the legacy fallback; the adaptive layers below are what
+#   launchers and the Android 12+ system splash actually show
+# - presplash is served as drawable/presplash.jpg (p4a copies it raw), so the
+#   asphalt background is baked in; android.presplash_color must match it
+icon.filename = assets/branding/icon.png
+icon.adaptive_background.filename = assets/branding/icon_bg.png
+icon.adaptive_foreground.filename = assets/branding/icon_fg.png
+presplash.filename = assets/branding/presplash.jpg
+android.presplash_color = #101218
 
 log_level = 2
 
