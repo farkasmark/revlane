@@ -666,8 +666,11 @@ class AndroidRadio(Radio):
                 raise ConnectionError(
                     f"write to {char_uuid} timed out - connection retired"
                 ) from None
-            except BaseException:
+            except asyncio.CancelledError:
                 # cancellation leaves the write's outcome just as unknowable
-                # as a timeout: retire the link, then propagate
+                # as a timeout: retire the link, then propagate.  An explicit
+                # ATT rejection is different - the frame was refused, the
+                # outcome is known and the link stays up (the car NAKs while
+                # busy; that is transient, not a lost connection).
                 await self.disconnect()
                 raise

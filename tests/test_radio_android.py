@@ -636,3 +636,31 @@ async def test_write_cancellation_retires_the_connection(monkeypatch):
     radio._cb_write("AA:BB:CC:DD:EE:FF", SERVICE_UUID, 0)  # late ACK: dropped
     with pytest.raises(ConnectionError):
         await radio.write(SERVICE_UUID, b"\x02")
+
+
+async def test_explicit_nak_keeps_the_connection_usable(monkeypatch):
+    """An acknowledged ATT rejection is not ambiguous: the frame was
+    refused, the link is fine.  The car NAKs while busy - retiring the
+    connection on every NAK would turn a transient into a lost link."""
+    from qcar.radio import SERVICE_UUID
+
+    radio, router, adapter = _radio_under_test(monkeypatch)
+    await _connect_ok(radio)
+    assert radio.connected
+
+    task = asyncio.create_task(radio.write(SERVICE_UUID, b"\x01"))
+    await asyncio.sleep(0.05)
+    radio._cb_write("AA:BB:CC:DD:EE:FF", SERVICE_UUID, 0x0E)  # explicit NAK
+    with pytest.raises(ConnectionError, match="rejected"):
+        await task
+    assert radio.connected is True, "a NAK must not retire the connection"
+    assert adapter.gatts[0].close_calls == 0
+    assert router._sessions, "session still live after a NAK"
+
+    # the next write goes out and is acknowledged normally - no reconnect
+    ok_task = asyncio.create_task(radio.write(SERVICE_UUID, b"\x02"))
+    await asyncio.sleep(0.05)
+    radio._cb_write("AA:BB:CC:DD:EE:FF", SERVICE_UUID, 0)
+    await ok_task
+    assert radio.connected is True
+    assert adapter.gatts[0].close_calls == 0
