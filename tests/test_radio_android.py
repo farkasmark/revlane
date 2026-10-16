@@ -174,6 +174,21 @@ async def test_gatt_callbacks_resolve_operation_futures():
         await asyncio.wait_for(fut, 1)  # the car's ATT rejection is visible
 
 
+def test_gatt_status_text_hedges_and_distinguishes():
+    """The codes do not uniquely establish a cause (8 and 133 are catch-alls
+    in the Android stack), so the texts must offer possible causes - never a
+    diagnosis - while still distinguishing the codes from each other."""
+    from qcar.radio_android import _gatt_status_text
+
+    texts = [_gatt_status_text(s) for s in (8, 19, 62, 133)]
+    assert len(set(texts)) == 4  # each code says something different
+    for text in texts:
+        assert "gatt status" in text  # the raw code stays visible for logs
+        assert "may" in text or "possibly" in text  # hedged, not diagnosed
+    assert "asleep" in _gatt_status_text(8)
+    assert "Bluetooth" in _gatt_status_text(133)
+
+
 async def test_notify_callback_receives_bytes_via_the_loop():
     radio = AndroidRadio()
     radio._loop = asyncio.get_running_loop()

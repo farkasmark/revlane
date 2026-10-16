@@ -59,6 +59,23 @@ from .radio import (
 
 log = logging.getLogger("qcar")
 
+
+def _gatt_status_text(status: int) -> str:
+    """Human text for the GATT status codes we actually see in the field.
+
+    Android surfaces these raw (e.g. status=8).  The codes do NOT uniquely
+    identify a cause - 8 and 133 in particular are catch-alls - so the text
+    names the layer that failed and offers possible causes, never a
+    diagnosis.  The raw code stays in the message for the log.
+    """
+    text = {
+        8: "no answer from the car - it may be asleep or out of range",
+        19: "the car dropped the link - possibly its battery or sleep timer",
+        62: "the phone's Bluetooth stack may have failed to establish the link",
+        133: "the phone's Bluetooth stack failed - toggling Bluetooth may help",
+    }.get(status, "bluetooth error")
+    return f"{text} (gatt status {status})"
+
 class _CallbackRouter:
     """Delivers ``PyBleListener`` events to the radio that owns them.
 
@@ -331,6 +348,7 @@ class AndroidRadio(Radio):
         self,
         timeout: float = 8.0,
         on_device: Callable[[Discovered], None] | None = None,
+        until_seen: str | None = None,
     ) -> list[Discovered]:
         j = _classes()
         self._loop = asyncio.get_running_loop()
@@ -376,7 +394,15 @@ class AndroidRadio(Radio):
             raise ConnectionError(f"could not start BLE scan: {exc}") from exc
 
         try:
-            await asyncio.sleep(timeout)
+            deadline = self._loop.time() + timeout
+            while self._loop.time() < deadline:
+                # until_seen: connect()'s presence check polls for one address
+                # and stops the moment it appears - a healthy car is usually
+                # seen in well under a second, so the pre-connect cost is
+                # near zero
+                if until_seen is not None and until_seen in self._scan_hits:
+                    break
+                await asyncio.sleep(0.1)
         finally:
             with contextlib.suppress(Exception):
                 scanner.stopScan(scan_cb)
@@ -410,8 +436,49 @@ class AndroidRadio(Radio):
     # ------------------------------------------------------------------
     # connection
 
-    async def connect(self, address: str, timeout: float = 20.0) -> None:
+    async def connect(
+        self, address: str, timeout: float = 12.0, retries: int = 2
+    ) -> None:
+        """Connect, with a presence pre-check and automatic retries.
+
+        Field behaviour this absorbs: a car that is asleep or out of range
+        makes connectGatt burn its whole timeout (the stack answers with
+        gatt status 8), and a phone stack that has failed a few connects
+        wedges on that address until Bluetooth is toggled.  Seeing the car
+        advertise first turns "20 s blind hang, generic error" into "2 s -
+        the car is not advertising, wake it", and the retries absorb the
+        transient status 8/133 failures that used to send users hunting for
+        workarounds (deleting profiles, toggling Bluetooth).
+        """
         self._loop = asyncio.get_running_loop()
+        last_error: Exception | None = None
+        for attempt in range(retries + 1):
+            # see the car advertise first: a silent car means asleep or out
+            # of range, and failing fast with that beats a blind hang (the
+            # scan itself also gives the stack a beat to settle)
+            hits = await self.scan(
+                timeout=2.5 if attempt == 0 else 1.5, until_seen=address
+            )
+            if address not in {h.address for h in hits}:
+                raise ConnectionError(
+                    f"{address}: the car is not advertising right now. It may "
+                    "be asleep (it sleeps when idle - power-cycle it), out of "
+                    "range, or its battery may be flat"
+                )
+            try:
+                await self._connect_once(address, timeout)
+                return
+            except ConnectionError as exc:
+                last_error = exc
+                log.warning("connect attempt %d failed: %s", attempt + 1, exc)
+                if attempt < retries:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+        raise ConnectionError(
+            f"{address}: {last_error}. Possible fixes, in order: retry, "
+            "power-cycle the car, toggle the phone's Bluetooth off and on"
+        ) from last_error
+
+    async def _connect_once(self, address: str, timeout: float) -> None:
         ad = self._bt_adapter()
         dev = ad.getRemoteDevice(address)
         if dev is None:
@@ -447,10 +514,7 @@ class AndroidRadio(Radio):
             await asyncio.wait_for(self._connect_fut, timeout)
         except asyncio.TimeoutError:
             await self.disconnect()
-            raise ConnectionError(
-                f"{address} did not answer. Is the car switched on? If another "
-                "program still holds the link, power-cycle the car."
-            ) from None
+            raise ConnectionError(f"{address} did not answer the link request") from None
         log.info("android: connected to %s", address)
 
     @property
@@ -487,7 +551,7 @@ class AndroidRadio(Radio):
             self._link_up = False
             fut, self._connect_fut = self._connect_fut, None
             self._resolve(
-                fut, ConnectionError(f"connect failed, gatt status {status}")
+                fut, ConnectionError(f"connect failed: {_gatt_status_text(status)}")
             )
 
     def _cb_services(self, address, status: int) -> None:
